@@ -8,8 +8,9 @@
     "preview": "vite preview",
     "test": "jest",
     "test:watch": "jest --watch",
+    "preinstall": "node scripts/preinstall-fast-equals.cjs",
     "postinstall": "node scripts/replace-fast-equals.cjs",
-    "check-setup": "node scripts/check-setup.js"
+    "check-setup": "node scripts/check-setup.cjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.3",
