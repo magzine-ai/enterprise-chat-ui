@@ -7,7 +7,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "postinstall": "node scripts/replace-fast-equals.cjs",
+    "check-setup": "node scripts/check-setup.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.3",
