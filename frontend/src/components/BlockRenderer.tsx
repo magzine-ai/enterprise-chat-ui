@@ -39,7 +39,8 @@
  * ```
  */
 import React from 'react';
-import ReactMarkdown from 'react-markdown';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import type { Block } from '@/types';
 import ChartBlock from './ChartBlock';
 import AsyncPlaceholder from './AsyncPlaceholder';
@@ -64,12 +65,24 @@ interface BlockRendererProps {
 
 const BlockRenderer: React.FC<BlockRendererProps> = ({ block }) => {
   switch (block.type) {
-    case 'markdown':
+    case 'markdown': {
+      const markdownContent = block.data?.content || '';
+      // Parse markdown synchronously
+      let htmlContent: string;
+      try {
+        htmlContent = marked(markdownContent, { breaks: true, gfm: true }) as string;
+      } catch (e) {
+        console.error('Markdown parsing error:', e);
+        htmlContent = markdownContent; // Fallback to plain text
+      }
+      const sanitizedHtml = DOMPurify.sanitize(htmlContent);
       return (
-        <div className="block-markdown">
-          <ReactMarkdown>{block.data?.content || ''}</ReactMarkdown>
-        </div>
+        <div 
+          className="block-markdown"
+          dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+        />
       );
+    }
 
     case 'list':
       return (

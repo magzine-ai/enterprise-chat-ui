@@ -43,7 +43,17 @@ export default defineConfig({
   },
   // Ensure proper module resolution
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-redux', '@reduxjs/toolkit'],
+    include: [
+      'react',
+      'react-dom',
+      'react-redux',
+      '@reduxjs/toolkit',
+      'marked',
+      'dompurify',
+      'chart.js',
+      'react-chartjs-2',
+      'mermaid',
+    ],
     exclude: [],
   },
   // Fix for enterprise environments with strict file system
