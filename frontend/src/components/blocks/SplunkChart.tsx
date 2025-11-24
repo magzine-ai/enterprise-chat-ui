@@ -3,6 +3,7 @@
  * 
  * Displays data visualizations similar to Splunk's charting capabilities.
  * Supports multiple chart types: line, bar, area, pie, and timechart.
+ * Uses Chart.js instead of recharts for enterprise compatibility.
  * 
  * @example
  * ```tsx
@@ -15,33 +16,36 @@
  *   title="Request Rate Over Time"
  * />
  * ```
- * 
- * @param type - Chart type: 'line' | 'bar' | 'area' | 'pie' | 'timechart'
- * @param data - Array of data points
- * @param title - Chart title
- * @param xAxis - X-axis label
- * @param yAxis - Y-axis label
- * @param series - Series configuration for multi-series charts
- * @param showLegend - Whether to show legend (default: true)
- * @param height - Chart height in pixels (default: 300)
  */
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  AreaChart,
-  Area,
-  PieChart,
-  Pie,
-  Cell,
-  XAxis,
-  YAxis,
-  CartesianGrid,
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  ArcElement,
+  Title,
   Tooltip,
   Legend,
-} from 'recharts';
+  Filler,
+} from 'chart.js';
+import { Line, Bar, Pie } from 'react-chartjs-2';
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 interface ChartDataPoint {
   [key: string]: any;
@@ -63,7 +67,23 @@ interface SplunkChartProps {
   isTimeSeries?: boolean;
 }
 
-const COLORS = ['#19c37d', '#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
+const COLORS = [
+  'rgba(25, 195, 125, 1)',   // #19c37d
+  'rgba(0, 136, 254, 1)',    // #0088FE
+  'rgba(0, 196, 159, 1)',    // #00C49F
+  'rgba(255, 187, 40, 1)',   // #FFBB28
+  'rgba(255, 128, 66, 1)',   // #FF8042
+  'rgba(136, 132, 216, 1)',  // #8884d8
+];
+
+const COLORS_TRANSPARENT = [
+  'rgba(25, 195, 125, 0.6)',
+  'rgba(0, 136, 254, 0.6)',
+  'rgba(0, 196, 159, 0.6)',
+  'rgba(255, 187, 40, 0.6)',
+  'rgba(255, 128, 66, 0.6)',
+  'rgba(136, 132, 216, 0.6)',
+];
 
 const SplunkChart: React.FC<SplunkChartProps> = ({
   type: initialType,
@@ -82,23 +102,11 @@ const SplunkChart: React.FC<SplunkChartProps> = ({
     if (initialType === 'pie') return 'pie';
     return initialType as 'line' | 'bar' | 'area' | 'column';
   });
-  const [chartWidth, setChartWidth] = useState(988);
-  const containerRef = React.useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Use selected type if switching is allowed, otherwise use initial type
   const type = (allowChartTypeSwitch || isTimeSeries) ? selectedChartType : initialType;
 
-  // Measure container width on mount and resize
-  React.useEffect(() => {
-    const updateWidth = () => {
-      if (containerRef.current) {
-        setChartWidth(containerRef.current.offsetWidth);
-      }
-    };
-    updateWidth();
-    window.addEventListener('resize', updateWidth);
-    return () => window.removeEventListener('resize', updateWidth);
-  }, []);
   if (!data || data.length === 0) {
     return <div className="chart-empty">No data available for chart</div>;
   }
@@ -116,134 +124,127 @@ const SplunkChart: React.FC<SplunkChartProps> = ({
     dataKeys = Object.keys(data[0]).filter(key => !excludeKeys.includes(key));
   }
 
-  // Debug logging (remove in production)
-  if (process.env.NODE_ENV === 'development') {
-    console.log('SplunkChart render:', { type, dataLength: data.length, dataKeys, xAxisKey });
-  }
-
-  const renderChart = () => {
-    // Use selectedChartType for rendering when switching is enabled
+  // Prepare Chart.js data structure
+  const prepareChartData = () => {
     const renderType = (allowChartTypeSwitch || isTimeSeries) && type !== 'pie' 
       ? (selectedChartType === 'column' ? 'bar' : selectedChartType)
       : (type === 'column' ? 'bar' : type);
-    
+
+    // For pie charts, different data structure
+    if (renderType === 'pie') {
+      return {
+        labels: data.map((item) => item[xAxisKey] || item.name || String(item[yAxis || 'value'])),
+        datasets: [{
+          label: yAxis || 'value',
+          data: data.map((item) => item[yAxis || 'value'] || 0),
+          backgroundColor: COLORS_TRANSPARENT.slice(0, data.length),
+          borderColor: COLORS.slice(0, data.length),
+          borderWidth: 2,
+        }],
+      };
+    }
+
+    // For other chart types
+    const labels = data.map((item) => String(item[xAxisKey] || item.name || ''));
+
+    const datasets = dataKeys.map((key, idx) => {
+      const isArea = renderType === 'area';
+      return {
+        label: key,
+        data: data.map((item) => item[key] || 0),
+        borderColor: COLORS[idx % COLORS.length],
+        backgroundColor: isArea 
+          ? COLORS_TRANSPARENT[idx % COLORS.length]
+          : COLORS[idx % COLORS.length],
+        fill: isArea,
+        tension: 0.4, // Smooth curves
+        borderWidth: 2,
+      };
+    });
+
+    return { labels, datasets };
+  };
+
+  const chartData = prepareChartData();
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: showLegend && type !== 'pie',
+        position: 'top' as const,
+      },
+      title: {
+        display: !!title,
+        text: title,
+      },
+      tooltip: {
+        mode: 'index' as const,
+        intersect: false,
+      },
+    },
+    scales: type !== 'pie' ? {
+      x: {
+        display: true,
+        title: {
+          display: true,
+          text: xAxisKey,
+        },
+      },
+      y: {
+        display: true,
+        title: {
+          display: true,
+          text: yAxis || 'Value',
+        },
+        beginAtZero: true,
+      },
+    } : undefined,
+  };
+
+  const renderChart = () => {
+    const renderType = (allowChartTypeSwitch || isTimeSeries) && type !== 'pie' 
+      ? (selectedChartType === 'column' ? 'bar' : selectedChartType)
+      : (type === 'column' ? 'bar' : type);
+
+    const chartProps = {
+      data: chartData,
+      options: {
+        ...chartOptions,
+        indexAxis: (renderType === 'bar' && selectedChartType === 'column') ? 'y' as const : undefined,
+      },
+    };
+
     switch (renderType) {
       case 'line':
       case 'timechart':
-        return (
-          <LineChart width={chartWidth} height={height} data={data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey={xAxisKey} />
-            <YAxis />
-            <Tooltip />
-            {showLegend && <Legend />}
-            {dataKeys.map((key, idx) => (
-              <Line
-                key={key}
-                type="monotone"
-                dataKey={key}
-                stroke={COLORS[idx % COLORS.length]}
-                strokeWidth={2}
-              />
-            ))}
-          </LineChart>
-        );
-
+        return <Line {...chartProps} />;
       case 'bar':
-        return (
-          <BarChart 
-            width={chartWidth} 
-            height={height}
-            data={data} 
-            margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-            layout={((allowChartTypeSwitch || isTimeSeries) && selectedChartType === 'column') ? 'vertical' : 'horizontal'}
-          >
-            <CartesianGrid strokeDasharray="3 3" />
-            {((allowChartTypeSwitch || isTimeSeries) && selectedChartType === 'column') ? (
-              <>
-                <XAxis type="number" />
-                <YAxis dataKey={xAxisKey} type="category" width={80} />
-              </>
-            ) : (
-              <>
-                <XAxis dataKey={xAxisKey} />
-                <YAxis />
-              </>
-            )}
-            <Tooltip />
-            {showLegend && <Legend />}
-            {dataKeys.map((key, idx) => (
-              <Bar
-                key={key}
-                dataKey={key}
-                fill={COLORS[idx % COLORS.length]}
-              />
-            ))}
-          </BarChart>
-        );
-
+        return <Bar {...chartProps} />;
       case 'area':
-        return (
-          <AreaChart width={chartWidth} height={height} data={data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey={xAxisKey} />
-            <YAxis />
-            <Tooltip />
-            {showLegend && <Legend />}
-            {dataKeys.map((key, idx) => (
-              <Area
-                key={key}
-                type="monotone"
-                dataKey={key}
-                stroke={COLORS[idx % COLORS.length]}
-                fill={COLORS[idx % COLORS.length]}
-                fillOpacity={0.6}
-              />
-            ))}
-          </AreaChart>
-        );
-
+        return <Line {...chartProps} data={{
+          ...chartData,
+          datasets: chartData.datasets.map(ds => ({ ...ds, fill: true })),
+        }} />;
       case 'pie':
-        return (
-          <PieChart width={chartWidth} height={height}>
-            <Pie
-              data={data}
-              cx="50%"
-              cy="50%"
-              labelLine={false}
-              label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-              outerRadius={Math.min(height * 0.3, 120)}
-              fill="#8884d8"
-              dataKey={yAxis || 'value'}
-            >
-              {data.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-              ))}
-            </Pie>
-            <Tooltip />
-            {showLegend && <Legend />}
-          </PieChart>
-        );
-
+        return <Pie {...chartProps} />;
       default:
         return <div>Unsupported chart type: {type}</div>;
     }
   };
 
-  const chartRef = React.useRef<HTMLDivElement>(null);
-
   const handleOpenPopup = () => {
     const left = Math.round((window.screen.width - 1200) / 2);
     const top = Math.round((window.screen.height - 800) / 2);
     
-    // Create a data URL with the chart content
-    const chartHTML = chartRef.current?.innerHTML || '';
     const htmlContent = `
       <!DOCTYPE html>
       <html>
         <head>
           <title>${title || 'Chart'}</title>
           <meta charset="utf-8">
+          <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body { 
@@ -261,22 +262,31 @@ const SplunkChart: React.FC<SplunkChartProps> = ({
               overflow: auto;
             }
             h2 { margin-bottom: 20px; color: #333; }
+            canvas { max-width: 100% !important; }
           </style>
         </head>
         <body>
           <div class="popup-chart-container">
             <h2>${title || 'Chart'}</h2>
-            ${chartHTML}
+            <canvas id="chartCanvas"></canvas>
+            <script>
+              const data = ${JSON.stringify(chartData)};
+              const ctx = document.getElementById('chartCanvas').getContext('2d');
+              new Chart(ctx, {
+                type: '${type === 'pie' ? 'pie' : type === 'area' ? 'line' : type}',
+                data: data,
+                options: ${JSON.stringify(chartOptions)}
+              });
+            </script>
           </div>
         </body>
       </html>
     `;
     
-    // Open as popup window with specific features
     const popup = window.open(
       '',
       'chartPopup',
-      `width=1200,height=800,left=${left},top=${top},resizable=yes,scrollbars=yes,toolbar=no,menubar=no,location=no,status=no`
+      `width=1200,height=800,left=${left},top=${top},resizable=yes,scrollbars=yes`
     );
     
     if (popup) {
@@ -284,21 +294,17 @@ const SplunkChart: React.FC<SplunkChartProps> = ({
       popup.document.write(htmlContent);
       popup.document.close();
       popup.focus();
-    } else {
-      // Fallback if popup blocked - open in new tab
-      alert('Popup blocked. Opening in new tab instead.');
-      handleOpenNewTab();
     }
   };
 
   const handleOpenNewTab = () => {
-    const chartHTML = chartRef.current?.innerHTML || '';
     const htmlContent = `
       <!DOCTYPE html>
       <html>
         <head>
           <title>${title || 'Chart'}</title>
           <meta charset="utf-8">
+          <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body { 
@@ -315,18 +321,27 @@ const SplunkChart: React.FC<SplunkChartProps> = ({
               min-height: calc(100vh - 80px);
             }
             h2 { margin-bottom: 20px; color: #333; }
+            canvas { max-width: 100% !important; }
           </style>
         </head>
         <body>
           <div class="tab-chart-container">
             <h2>${title || 'Chart'}</h2>
-            ${chartHTML}
+            <canvas id="chartCanvas"></canvas>
+            <script>
+              const data = ${JSON.stringify(chartData)};
+              const ctx = document.getElementById('chartCanvas').getContext('2d');
+              new Chart(ctx, {
+                type: '${type === 'pie' ? 'pie' : type === 'area' ? 'line' : type}',
+                data: data,
+                options: ${JSON.stringify(chartOptions)}
+              });
+            </script>
           </div>
         </body>
       </html>
     `;
     
-    // Open in new tab (full browser tab)
     const newTab = window.open('', '_blank');
     if (newTab) {
       newTab.document.open();
@@ -403,14 +418,15 @@ const SplunkChart: React.FC<SplunkChartProps> = ({
         </div>
       )}
       
-      <div ref={containerRef} className="chart-container" style={{ width: '100%', height: `${height}px`, overflow: 'auto' }}>
-        <div ref={chartRef}>
-          {renderChart()}
-        </div>
+      <div 
+        ref={containerRef} 
+        className="chart-container" 
+        style={{ width: '100%', height: `${height}px`, position: 'relative' }}
+      >
+        {renderChart()}
       </div>
     </div>
   );
 };
 
 export default SplunkChart;
-

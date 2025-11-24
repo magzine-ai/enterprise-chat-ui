@@ -43,11 +43,16 @@ interface QueryResult {
     xAxis?: string;
     yAxis?: string;
     series?: string[];
+    format?: string; // For single value: 'number', 'percent', 'currency', etc.
     valueField?: string;
     labelField?: string;
-    format?: string; // For single value: 'number', 'percent', 'currency', etc.
     unit?: string; // For single value: 'ms', 'GB', etc.
   };
+  singleValue?: number;
+  gaugeValue?: number;
+  chartData?: any[];
+  isTimeSeries?: boolean;
+  allowChartTypeSwitch?: boolean;
 }
 
 interface QueryBlockProps {

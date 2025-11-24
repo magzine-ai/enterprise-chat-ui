@@ -8,20 +8,19 @@
     "preview": "vite preview",
     "test": "jest",
     "test:watch": "jest --watch",
-    "preinstall": "node scripts/preinstall-fast-equals.cjs",
-    "postinstall": "node scripts/replace-fast-equals.cjs",
     "check-setup": "node scripts/check-setup.cjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.3",
     "@reduxjs/toolkit": "^2.0.1",
+    "chart.js": "^4.5.1",
     "mermaid": "^11.12.1",
     "react": "^18.2.0",
+    "react-chartjs-2": "^5.3.1",
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.49.3",
     "react-markdown": "^9.0.1",
     "react-redux": "^9.0.4",
-    "recharts": "^2.10.3",
     "zod": "^3.22.4"
   },
   "devDependencies": {
