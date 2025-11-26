@@ -41,6 +41,11 @@ class ApiService {
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`API error ${response.status}:`, errorText);
+        // Don't throw for 400 errors when auth is disabled
+        if (response.status === 400 && errorText.includes('Authentication is disabled')) {
+          console.log('Auth is disabled, continuing without token');
+          return {} as T; // Return empty object for failed auth requests
+        }
         throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
 
@@ -66,7 +71,13 @@ class ApiService {
     });
 
     if (!response.ok) {
-      throw new Error('Login failed');
+      const errorData = await response.json().catch(() => ({ detail: 'Login failed' }));
+      // If auth is disabled, don't throw - just return empty token
+      if (response.status === 400 && errorData.detail?.includes('Authentication is disabled')) {
+        console.log('Auth is disabled, skipping login');
+        return { access_token: '', token_type: 'bearer' };
+      }
+      throw new Error(errorData.detail || 'Login failed');
     }
 
     const data = await response.json();
@@ -86,9 +97,15 @@ class ApiService {
     });
   }
 
+  async deleteConversation(conversationId: number): Promise<void> {
+    await this.request(`/conversations/${conversationId}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Messages
-  async createMessage(conversationId: number, content: string, role: 'user' | 'assistant' = 'user', blocks?: any[]): Promise<Message> {
-    return this.request<Message>(`/conversations/${conversationId}/messages`, {
+  async createMessage(conversationId: number, content: string, role: 'user' | 'assistant' = 'user', blocks?: any[]): Promise<{ message: Message; job_id: string | null }> {
+    return this.request<{ message: Message; job_id: string | null }>(`/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content, role, blocks }),
     });

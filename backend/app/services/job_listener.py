@@ -1,27 +1,24 @@
-"""Redis pubsub listener for job updates (runs in FastAPI process)."""
+"""Event bus listener for job updates (runs in FastAPI process)."""
 import json
 import asyncio
-from app.core.redis_client import redis_client
+from app.core.event_bus import event_bus
 from app.services.websocket_manager import websocket_manager
 
 
+async def handle_job_update(message: str):
+    """Handle job update event."""
+    try:
+        data = json.loads(message)
+        await websocket_manager.broadcast(data)
+    except Exception as e:
+        print(f"Error broadcasting job update: {e}")
+
+
 async def listen_for_job_updates():
-    """Listen to Redis pubsub and broadcast job updates via WebSocket."""
-    pubsub = redis_client.pubsub()
-    pubsub.subscribe("job_updates")
-    
-    for message in pubsub.listen():
-        if message["type"] == "message":
-            try:
-                data = json.loads(message["data"])
-                await websocket_manager.broadcast(data)
-            except Exception as e:
-                print(f"Error broadcasting job update: {e}")
-
-
-def start_job_listener():
-    """Start job update listener in background task."""
-    # This will be started in main.py startup event
-    pass
+    """Listen to event bus and broadcast job updates via WebSocket."""
+    await event_bus.subscribe("job_updates", handle_job_update)
+    # Keep the subscription alive
+    while True:
+        await asyncio.sleep(1)
 
 

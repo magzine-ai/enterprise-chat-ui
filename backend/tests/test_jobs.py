@@ -1,6 +1,7 @@
 """Tests for job worker."""
 import pytest
-from app.workers.chart_worker import generate_chart_data
+import asyncio
+from app.workers.chart_worker import generate_chart_data_async
 from app.models.job import Job, JobStatus
 from app.core.database import init_db, get_session
 from sqlmodel import Session, select
@@ -9,7 +10,8 @@ import uuid
 init_db()
 
 
-def test_chart_worker():
+@pytest.mark.asyncio
+async def test_chart_worker():
     """Test chart data generation worker."""
     session = next(get_session())
     
@@ -26,7 +28,7 @@ def test_chart_worker():
     session.refresh(job)
     
     # Run worker
-    generate_chart_data(job_id, range_days=7)
+    await generate_chart_data_async(job_id, range_days=7)
     
     # Verify job completed
     statement = select(Job).where(Job.job_id == job_id)

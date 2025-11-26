@@ -19,37 +19,100 @@ const conversationsSlice = createSlice({
   initialState,
   reducers: {
     setConversations: (state, action: PayloadAction<Conversation[]>) => {
-      state.conversations = action.payload;
+      // Create a completely new array with new objects to avoid mutation issues
+      // Deep copy each conversation to ensure no shared references
+      const newConversations = action.payload.map(conv => ({
+        id: conv.id,
+        title: conv.title,
+        created_at: conv.created_at,
+        updated_at: conv.updated_at,
+      }));
+      
+      // Return new state object to ensure immutability
+      return {
+        ...state,
+        conversations: newConversations,
+      };
     },
     addConversation: (state, action: PayloadAction<Conversation>) => {
-      state.conversations.unshift(action.payload);
-      state.currentConversationId = action.payload.id;
+      // Create a new conversation object from payload
+      const newConversation: Conversation = {
+        id: action.payload.id,
+        title: action.payload.title,
+        created_at: action.payload.created_at,
+        updated_at: action.payload.updated_at,
+      };
+      // Create new objects for all existing conversations and prepend the new one
+      const newConversations = [
+        newConversation,
+        ...state.conversations.map(conv => ({
+          id: conv.id,
+          title: conv.title,
+          created_at: conv.created_at,
+          updated_at: conv.updated_at,
+        }))
+      ];
+      
+      // Return new state object to ensure immutability
+      return {
+        ...state,
+        conversations: newConversations,
+        currentConversationId: action.payload.id,
+      };
     },
     setCurrentConversation: (state, action: PayloadAction<number | null>) => {
-      state.currentConversationId = action.payload;
+      // Return new state object to ensure immutability
+      // This prevents mutation detection issues
+      return {
+        ...state,
+        currentConversationId: action.payload,
+      };
     },
     updateConversation: (
       state,
       action: PayloadAction<{ id: number; title?: string }>
     ) => {
+      // Find and update the conversation
       const index = state.conversations.findIndex(
         (c) => c.id === action.payload.id
       );
       if (index !== -1) {
-        if (action.payload.title !== undefined) {
-          state.conversations[index].title = action.payload.title;
-        }
-        state.conversations[index].updated_at = new Date().toISOString();
+        // Create a new array with the updated conversation
+        state.conversations = state.conversations.map((conv, i) => {
+          if (i === index) {
+            return {
+              id: conv.id,
+              title: action.payload.title !== undefined ? action.payload.title : conv.title,
+              created_at: conv.created_at,
+              updated_at: new Date().toISOString(),
+            };
+          }
+          return {
+            id: conv.id,
+            title: conv.title,
+            created_at: conv.created_at,
+            updated_at: conv.updated_at,
+          };
+        });
       }
     },
     deleteConversation: (state, action: PayloadAction<number>) => {
-      state.conversations = state.conversations.filter(
-        (c) => c.id !== action.payload
-      );
+      // Filter out the conversation to delete and create new objects
+      const newConversations = state.conversations
+        .filter(conv => conv.id !== action.payload)
+        .map(conv => ({
+          id: conv.id,
+          title: conv.title,
+          created_at: conv.created_at,
+          updated_at: conv.updated_at,
+        }));
+      
+      // Update current conversation ID if the deleted one was selected
       if (state.currentConversationId === action.payload) {
-        state.currentConversationId =
-          state.conversations.length > 0 ? state.conversations[0].id! : null;
+        state.currentConversationId = newConversations.length > 0 ? newConversations[0].id! : null;
       }
+      
+      state.conversations = newConversations;
     },
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.loading = action.payload;

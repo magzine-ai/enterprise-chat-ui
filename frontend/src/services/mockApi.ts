@@ -16,6 +16,11 @@ const MOCK_TOKEN = 'mock-jwt-token-' + Date.now();
 class MockApiService {
   private token: string | null = MOCK_TOKEN;
 
+  constructor() {
+    // Log initial state on service creation
+    console.log('[Mock API] Service initialized. Initial conversations count:', conversations.length);
+  }
+
   setToken(token: string) {
     this.token = token;
     localStorage.setItem('auth_token', token);
@@ -42,10 +47,12 @@ class MockApiService {
   // Conversations
   async getConversations(): Promise<Conversation[]> {
     await this.delay();
-    // Return a copy to avoid extensibility issues
-    return [...conversations].sort((a, b) => 
+    // Return a copy with new objects to avoid mutation issues
+    const result = conversations.map(conv => ({ ...conv })).sort((a, b) => 
       new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
     );
+    console.log(`[Mock API] getConversations() returning ${result.length} conversations:`, result.map(c => ({ id: c.id, title: c.title })));
+    return result;
   }
 
   async createConversation(title?: string): Promise<Conversation> {
@@ -75,13 +82,24 @@ class MockApiService {
     }
   }
 
+  async deleteConversation(conversationId: number): Promise<void> {
+    await this.delay();
+    // Remove conversation from in-memory storage
+    const beforeCount = conversations.length;
+    conversations = conversations.filter((c) => c.id !== conversationId);
+    const afterCount = conversations.length;
+    // Remove messages for this conversation
+    delete messagesByConversation[conversationId];
+    console.log(`[Mock API] Deleted conversation ${conversationId}. Conversations: ${beforeCount} -> ${afterCount}`);
+  }
+
   // Messages
   async createMessage(
     conversationId: number,
     content: string,
     role: 'user' | 'assistant' = 'user',
     blocks?: any[]
-  ): Promise<Message> {
+  ): Promise<{ message: Message; job_id: string | null }> {
     await this.delay();
     const now = new Date().toISOString();
     const message: Message = {
@@ -140,17 +158,22 @@ class MockApiService {
       ];
     }
 
-    // If user message, generate assistant response after a short delay
+    // Generate job_id for user messages (simulating async response)
+    let job_id: string | null = null;
     if (role === 'user') {
-      // Simulate thinking time (500-1500ms)
+      job_id = `mock-job-${nextJobId++}`;
+      // Simulate thinking time (500-1500ms) then generate assistant response
       const delay = 500 + Math.random() * 1000;
       setTimeout(() => {
         this.generateAssistantResponse(conversationId, content);
       }, delay);
     }
 
-    // Return a copy to avoid extensibility issues
-    return { ...message };
+    // Return format matching real API: { message, job_id }
+    return {
+      message: { ...message },
+      job_id
+    };
   }
 
   private async generateAssistantResponse(conversationId: number, userMessage: string) {
@@ -247,7 +270,7 @@ LIMIT 100;`,
       blocks.push({
         type: 'query',
         data: {
-          query: `index=web_logs 
+          query: `index=web_logs _mockapi
 | stats count by status
 | sort -count`,
           language: 'spl',
@@ -999,9 +1022,9 @@ What would you like to see an example of?`;
 
   async getMessages(conversationId: number): Promise<Message[]> {
     await this.delay();
-    // Return a copy to avoid extensibility issues
+    // Return a copy with new objects to avoid mutation issues
     const messages = messagesByConversation[conversationId] || [];
-    return [...messages];
+    return messages.map(msg => ({ ...msg }));
   }
 
   // Jobs
@@ -1123,7 +1146,27 @@ What would you like to see an example of?`;
       },
     };
   }
+
+  // Utility method to clear all conversations and reset state
+  clearAllConversations(): void {
+    conversations = [];
+    messagesByConversation = {};
+    nextConversationId = 1;
+    nextMessageId = 1;
+    nextJobId = 1;
+    // Clear localStorage if needed
+    localStorage.removeItem('conversations');
+    localStorage.removeItem('messages');
+    console.log('[Mock API] All conversations cleared, state reset');
+  }
 }
 
 export const mockApiService = new MockApiService();
+
+// Expose to window for easy console access
+if (typeof window !== 'undefined') {
+  (window as any).clearAllConversations = () => {
+    mockApiService.clearAllConversations();
+  };
+}
 

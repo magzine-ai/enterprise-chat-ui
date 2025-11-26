@@ -1,14 +1,9 @@
 """Job service for creating and managing async jobs."""
 from sqlmodel import Session
 from app.models.job import Job, JobStatus
-from app.workers.chart_worker import generate_chart_data
-from app.core.redis_client import redis_client
-from rq import Queue
+from app.workers.chart_worker import generate_chart_data_async
 import uuid
-import json
-
-queue = Queue(connection=redis_client)
-
+import asyncio
 
 class JobService:
     """Service for job management."""
@@ -22,7 +17,7 @@ class JobService:
         params: dict,
         conversation_id: int | None = None
     ) -> Job:
-        """Create and enqueue a new job."""
+        """Create and start a new async job."""
         job_id = str(uuid.uuid4())
         
         # Create job record
@@ -37,14 +32,13 @@ class JobService:
         self.session.commit()
         self.session.refresh(db_job)
         
-        # Enqueue job in RQ
+        # Start job as background task
         if job_type == "chart":
-            queue.enqueue(
-                generate_chart_data,
-                job_id,
-                params.get("range", 30),
-                job_id=job_id,
-                job_timeout="5m"
+            asyncio.create_task(
+                generate_chart_data_async(
+                    job_id,
+                    params.get("range", 30)
+                )
             )
         else:
             # TODO: Support other job types

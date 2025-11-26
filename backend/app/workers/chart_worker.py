@@ -2,18 +2,16 @@
 from sqlmodel import Session, select
 from app.models.job import Job, JobStatus
 from app.core.database import engine
-from app.core.redis_client import redis_client
-from app.services.websocket_manager import websocket_manager
-import time
+from app.core.event_bus import event_bus
+import asyncio
 import random
-import json
 
 
-def generate_chart_data(job_id: str, range_days: int = 30):
+async def generate_chart_data_async(job_id: str, range_days: int = 30):
     """
     Generate chart dataset (simulates long-running job).
     
-    Publishes progress updates via Redis pubsub and WebSocket.
+    Publishes progress updates via event bus and WebSocket.
     """
     with Session(engine) as session:
         # Get job
@@ -29,12 +27,12 @@ def generate_chart_data(job_id: str, range_days: int = 30):
         session.commit()
         
         # Broadcast start
-        _broadcast_job_update(job_id, job.status, 0)
+        await _broadcast_job_update(job_id, job.status, 0)
         
         # Simulate work with progress updates
         steps = 10
         for i in range(1, steps + 1):
-            time.sleep(0.5)  # Simulate work
+            await asyncio.sleep(0.5)  # Simulate work
             progress = int((i / steps) * 100)
             
             job.progress = progress
@@ -42,7 +40,7 @@ def generate_chart_data(job_id: str, range_days: int = 30):
             session.add(job)
             session.commit()
             
-            _broadcast_job_update(job_id, job.status, progress)
+            await _broadcast_job_update(job_id, job.status, progress)
         
         # Generate chart data
         data_points = []
@@ -74,11 +72,11 @@ def generate_chart_data(job_id: str, range_days: int = 30):
         session.commit()
         
         # Broadcast completion
-        _broadcast_job_update(job_id, job.status, 100, result)
+        await _broadcast_job_update(job_id, job.status, 100, result)
 
 
-def _broadcast_job_update(job_id: str, status: str, progress: int, result: dict | None = None):
-    """Broadcast job update via Redis pubsub (worker -> FastAPI -> WebSocket)."""
+async def _broadcast_job_update(job_id: str, status: str, progress: int, result: dict | None = None):
+    """Broadcast job update via event bus."""
     message = {
         "type": "job.update",
         "data": {
@@ -90,7 +88,7 @@ def _broadcast_job_update(job_id: str, status: str, progress: int, result: dict 
     if result:
         message["data"]["result"] = result
     
-    # Publish to Redis channel
-    redis_client.publish("job_updates", json.dumps(message))
+    # Publish to event bus
+    await event_bus.publish_json("job_updates", message)
 
 

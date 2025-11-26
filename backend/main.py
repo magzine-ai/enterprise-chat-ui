@@ -36,6 +36,16 @@ app.include_router(websocket.router)
 @app.on_event("startup")
 async def startup_event():
     """Start background tasks on startup."""
+    # Validate SSO configuration if enabled
+    from app.services.sso_service import sso_service
+    if sso_service.is_enabled():
+        is_valid, error = sso_service.validate_config()
+        if not is_valid:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"SSO configuration is invalid: {error}")
+            logger.warning("SSO will not function correctly. Please check your configuration.")
+    
     # Start job update listener
     asyncio.create_task(listen_for_job_updates())
 
@@ -59,6 +69,6 @@ async def metrics():
     # TODO: Add actual Prometheus metrics
     return {
         "active_connections": len(websocket_manager.active_connections),
-        "jobs_queued": 0  # TODO: Get from Redis
+        "jobs_queued": 0  # In-memory event bus doesn't track queue size
     }
 

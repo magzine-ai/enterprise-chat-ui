@@ -32,7 +32,7 @@ import {
   setConversations,
 } from '@/store/slices/conversationsSlice';
 import { setMessages } from '@/store/slices/messagesSlice';
-import { mockApiService as apiService } from '@/services/mockApi';
+import { apiService } from '@/services/apiService';
 import Dialog from './Dialog';
 
 interface Folder {
@@ -69,18 +69,8 @@ const ConversationSidebar: React.FC = () => {
     currentTitle: '',
   });
 
-  useEffect(() => {
-    // Load conversations on mount
-    const loadConversations = async () => {
-      try {
-        const convs = await apiService.getConversations();
-        dispatch(setConversations(convs));
-      } catch (error) {
-        console.error('Error loading conversations:', error);
-      }
-    };
-    loadConversations();
-  }, [dispatch]);
+  // Don't load conversations here - App.tsx handles initial loading
+  // This component just displays conversations from Redux store
 
   // Filter conversations based on search and folder
   const filteredConversations = useMemo(() => {
@@ -127,10 +117,15 @@ const ConversationSidebar: React.FC = () => {
     setIsCreating(true);
     try {
       const conv = await apiService.createConversation('New Chat');
+      // addConversation already sets currentConversationId, but we'll set it explicitly to ensure it's set
       dispatch(addConversation(conv));
+      // Ensure current conversation is set (addConversation sets it, but this ensures it's set)
       dispatch(setCurrentConversation(conv.id));
+      // Load messages for the new conversation (will be empty for a new conversation)
       const messages = await apiService.getMessages(conv.id);
       dispatch(setMessages({ conversationId: conv.id, messages }));
+      // Force a small delay to ensure state updates are processed
+      await new Promise(resolve => setTimeout(resolve, 0));
     } catch (error: any) {
       console.error('Error creating conversation:', error);
       alert(`Failed to create conversation: ${error.message || 'Unknown error'}`);
@@ -141,13 +136,20 @@ const ConversationSidebar: React.FC = () => {
 
   const handleSelectConversation = async (id: number) => {
     if (id === currentConversationId) return;
+    console.log('Selecting conversation:', id);
+    // Set conversation first
     dispatch(setCurrentConversation(id));
     // Load messages for selected conversation
+    // Note: MessageList will also load messages as a fallback, but we load here for immediate display
     try {
+      console.log('Loading messages for conversation:', id);
       const messages = await apiService.getMessages(id);
+      console.log(`Loaded ${messages.length} messages for conversation ${id}:`, messages);
       dispatch(setMessages({ conversationId: id, messages }));
+      console.log('Messages dispatched to Redux store');
     } catch (error) {
       console.error('Error loading messages:', error);
+      // Even if loading fails here, MessageList will try to load as fallback
     }
   };
 
@@ -161,7 +163,9 @@ const ConversationSidebar: React.FC = () => {
     
     const id = deleteDialog.conversationId;
     try {
-      // In a real app, call API to delete
+      // Delete from mock API storage
+      await apiService.deleteConversation(id);
+      // Delete from Redux state
       dispatch(deleteConversation(id));
       if (currentConversationId === id) {
         // Select first conversation or create new one
@@ -273,9 +277,9 @@ const ConversationSidebar: React.FC = () => {
               {searchQuery ? 'No conversations found' : 'No conversations yet'}
             </div>
           ) : (
-            filteredConversations.map((conv) => (
+            filteredConversations.map((conv, index) => (
               <div
-                key={conv.id}
+                key={conv.id ? `conv-${conv.id}` : `conv-temp-${index}`}
                 className={`conversation-item ${
                   currentConversationId === conv.id ? 'active' : ''
                 }`}

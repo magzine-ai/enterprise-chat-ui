@@ -3,8 +3,12 @@ class MockWebSocketService {
   private listeners: Map<string, Set<(data: any) => void>> = new Map();
   private connected = false;
 
-  connect(token: string) {
-    console.log('[Mock WS] Connected with token:', token.substring(0, 20) + '...');
+  connect(token?: string) {
+    if (token) {
+      console.log('[Mock WS] Connected with token:', token.substring(0, 20) + '...');
+    } else {
+      console.log('[Mock WS] Connected without token (auth disabled)');
+    }
     this.connected = true;
 
     // Listen for mock events from mockApi
@@ -53,6 +57,11 @@ class MockWebSocketService {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  getConnectionState(): 'connecting' | 'connected' | 'disconnected' {
+    if (this.connected) return 'connected';
+    return 'disconnected';
   }
 }
 

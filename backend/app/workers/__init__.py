@@ -1,3 +1,3 @@
-"""RQ worker job handlers."""
+"""Async worker job handlers."""
 
 

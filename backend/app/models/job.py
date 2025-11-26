@@ -31,7 +31,7 @@ class Job(JobBase, table=True):
     __tablename__ = "jobs"
     
     id: Optional[int] = Field(default=None, primary_key=True)
-    job_id: str = Field(unique=True, index=True)  # RQ job ID
+    job_id: str = Field(unique=True, index=True)  # Unique job identifier
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     

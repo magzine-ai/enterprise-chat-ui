@@ -54,6 +54,18 @@ const DiagramViewer: React.FC<DiagramViewerProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [mermaidId] = useState(() => `mermaid-${Math.random().toString(36).substr(2, 9)}`);
+  const isMountedRef = useRef(true);
+  const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (renderTimeoutRef.current) {
+        clearTimeout(renderTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     // Initialize Mermaid once
@@ -72,6 +84,13 @@ const DiagramViewer: React.FC<DiagramViewerProps> = ({
   useEffect(() => {
     if (type !== 'mermaid') {
       setIsLoading(false);
+      setError(null);
+      return;
+    }
+
+    if (!diagram || !diagram.trim()) {
+      setIsLoading(false);
+      setError('No diagram content provided');
       return;
     }
 
@@ -79,27 +98,44 @@ const DiagramViewer: React.FC<DiagramViewerProps> = ({
     setError(null);
 
     // Wait for ref to be available and DOM to be ready
-    const renderDiagram = async () => {
-      // Check if ref is available, if not wait a bit
+    const renderDiagram = async (retryCount = 0) => {
+      const maxRetries = 10;
+      
+      // Check if component is still mounted
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      // Check if ref is available, if not wait a bit and retry
       if (!mermaidRef.current) {
-        setTimeout(renderDiagram, 100);
+        if (retryCount < maxRetries) {
+          renderTimeoutRef.current = setTimeout(() => renderDiagram(retryCount + 1), 100);
+        } else {
+          if (isMountedRef.current) {
+            setError('Failed to initialize diagram container');
+            setIsLoading(false);
+          }
+        }
         return;
       }
 
       try {
         // Clear previous content
-        mermaidRef.current.innerHTML = '';
-        mermaidRef.current.removeAttribute('data-processed');
+        if (mermaidRef.current) {
+          mermaidRef.current.innerHTML = '';
+          mermaidRef.current.removeAttribute('data-processed');
+        }
         
         // Create a unique ID for this diagram
         const diagramId = `mermaid-${mermaidId}-${Date.now()}`;
         
-        console.log('Rendering Mermaid diagram with ID:', diagramId);
-        console.log('Diagram code:', diagram);
-        
         // Parse and render the diagram
         const result = await mermaid.render(diagramId, diagram);
-        console.log('Mermaid render result:', result);
+        
+        // Check if component is still mounted before updating state
+        if (!isMountedRef.current) {
+          return;
+        }
         
         if (mermaidRef.current && result.svg) {
           mermaidRef.current.innerHTML = result.svg;
@@ -110,18 +146,24 @@ const DiagramViewer: React.FC<DiagramViewerProps> = ({
         }
       } catch (err: any) {
         console.error('Mermaid rendering error:', err);
-        console.error('Error details:', err);
-        setError(err.message || 'Failed to render Mermaid diagram');
+        
+        // Check if component is still mounted before updating state
+        if (!isMountedRef.current) {
+          return;
+        }
+        
+        const errorMessage = err.message || 'Failed to render Mermaid diagram';
+        setError(errorMessage);
         setIsLoading(false);
         
         // Show the diagram code in case of error
         if (mermaidRef.current) {
           mermaidRef.current.innerHTML = `
             <div style="padding: 1rem; background: var(--bg-secondary); border-radius: 6px;">
-              <p style="color: #dc2626; margin-bottom: 0.5rem;">Error: ${err.message || 'Failed to render'}</p>
+              <p style="color: #dc2626; margin-bottom: 0.5rem;">Error: ${errorMessage}</p>
               <details>
                 <summary style="cursor: pointer; color: var(--text-primary);">Show diagram code</summary>
-                <pre style="margin-top: 0.5rem; padding: 0.5rem; background: var(--bg-primary); border-radius: 4px; overflow: auto; font-size: 0.875rem;">${diagram}</pre>
+                <pre style="margin-top: 0.5rem; padding: 0.5rem; background: var(--bg-primary); border-radius: 4px; overflow: auto; font-size: 0.875rem; white-space: pre-wrap;">${diagram}</pre>
               </details>
             </div>
           `;
@@ -131,8 +173,16 @@ const DiagramViewer: React.FC<DiagramViewerProps> = ({
 
     // Use requestAnimationFrame to ensure DOM is ready
     requestAnimationFrame(() => {
-      setTimeout(renderDiagram, 100);
+      renderTimeoutRef.current = setTimeout(() => renderDiagram(0), 100);
     });
+
+    // Cleanup function
+    return () => {
+      if (renderTimeoutRef.current) {
+        clearTimeout(renderTimeoutRef.current);
+        renderTimeoutRef.current = null;
+      }
+    };
   }, [type, diagram, mermaidId, theme]);
 
   const handleZoomIn = () => {

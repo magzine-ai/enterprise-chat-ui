@@ -7,11 +7,7 @@
  * - Initial conversation loading
  * - Redux store provider
  * 
- * The app supports two modes:
- * - Mock mode (default): Uses mockApi and mockWebSocket for frontend-only development
- * - Production mode: Connects to FastAPI backend
- * 
- * Mode is controlled by VITE_MOCK_SERVICES environment variable.
+ * Connects to FastAPI backend API.
  */
 import React, { useEffect } from 'react';
 import { Provider } from 'react-redux';
@@ -22,11 +18,11 @@ import {
   addConversation,
   setCurrentConversation,
 } from './store/slices/conversationsSlice';
-import { setMessages, addMessage } from './store/slices/messagesSlice';
+import { setMessages, addMessage, clearMessages, setWaitingForResponse } from './store/slices/messagesSlice';
 import { updateJob } from './store/slices/jobsSlice';
-// Use mock services for frontend-only development
-import { mockApiService as apiService } from './services/mockApi';
-import { mockWsService as wsService } from './services/mockWebSocket';
+// Use API service (switches between real and mock based on config)
+import { apiService } from './services/apiService';
+import { wsService } from './services/wsService';
 import ConversationSidebar from './components/ConversationSidebar';
 import MessageList from './components/MessageList';
 import MessageInput from './components/MessageInput';
@@ -37,28 +33,92 @@ const AppContent: React.FC = () => {
   const currentConversationId = useAppSelector(
     (state) => state.conversations.currentConversationId
   );
+  const messagesState = useAppSelector((state) => state.messages);
+
+  // Function to clear all conversations and start fresh
+  const clearAllAndStartFresh = async () => {
+    try {
+      // Clear Redux state
+      dispatch(setConversations([]));
+      dispatch(setCurrentConversation(null));
+      
+      // Clear all messages from Redux (iterate through all conversation IDs)
+      const conversationIds = Object.keys(messagesState.messagesByConversation).map(Number);
+      conversationIds.forEach(id => {
+        dispatch(clearMessages(id));
+      });
+      
+      // Create a fresh conversation
+      const conv = await apiService.createConversation('Main Chat');
+      dispatch(addConversation(conv));
+      dispatch(setCurrentConversation(conv.id));
+      
+      console.log('✅ All conversations cleared, fresh start initialized');
+    } catch (error) {
+      console.error('Error clearing conversations:', error);
+    }
+  };
+
+  // Expose to window for console access
+  useEffect(() => {
+    (window as any).clearAllConversations = clearAllAndStartFresh;
+    return () => {
+      delete (window as any).clearAllConversations;
+    };
+  }, []);
 
   useEffect(() => {
-    // Auto-login for dev (using mocks)
-    console.log('🚀 Using Mock API Services - Frontend-only mode');
+    console.log('🚀 Connecting to Python API backend');
     const initApp = async () => {
       try {
-        await apiService.login('dev', 'dev');
+        // Try to login if auth is enabled, otherwise skip
         const token = apiService.getToken();
-        if (token) {
-          wsService.connect(token);
+        if (!token) {
+          try {
+            await apiService.login('dev', 'dev');
+          } catch (loginError: any) {
+            // If login fails (e.g., auth disabled), continue without token
+            console.log('Login skipped or failed (auth may be disabled):', loginError?.message || loginError);
+            // Clear any partial token state
+            apiService.setToken('');
+          }
         }
+
+        // Connect WebSocket (with or without token)
+        const currentToken = apiService.getToken();
+        if (currentToken) {
+          wsService.connect(currentToken);
+        } else {
+          // Connect without token when auth is disabled
+          wsService.connect();
+        }
+        
+        // Log WebSocket connection status after a short delay
+        setTimeout(() => {
+          const wsState = wsService.getConnectionState();
+          console.log(`🔌 WebSocket connection state: ${wsState}`);
+          if (wsState === 'connected') {
+            console.log('✅ WebSocket ready for assistant messages');
+          } else {
+            console.warn('⚠️ WebSocket not connected - assistant messages may not arrive');
+          }
+        }, 1000); // Check after 1 second to allow connection to establish
 
         // Load existing conversations
         try {
+          console.log('Loading conversations...');
           const conversations = await apiService.getConversations();
+          console.log(`Loaded ${conversations.length} conversations:`, conversations);
           if (conversations.length > 0) {
             dispatch(setConversations(conversations));
             // Select the most recent conversation
             const latestConv = conversations[0];
+            console.log('Selecting conversation:', latestConv.id);
             dispatch(setCurrentConversation(latestConv.id));
             // Load messages for selected conversation
+            console.log('Loading messages for conversation:', latestConv.id);
             const messages = await apiService.getMessages(latestConv.id);
+            console.log(`Loaded ${messages.length} messages:`, messages);
             dispatch(setMessages({ conversationId: latestConv.id, messages }));
           } else {
             // Create initial conversation if none exist
@@ -71,47 +131,144 @@ const AppContent: React.FC = () => {
           }
         } catch (error) {
           console.error('Error loading conversations:', error);
-          // Fallback: create a new conversation
-          const conv = await apiService.createConversation('Main Chat');
-          dispatch(addConversation(conv));
-          dispatch(setCurrentConversation(conv.id));
+          // Don't create fallback conversation here to avoid duplicates
+          // User can create one manually if needed
         }
       } catch (error) {
         console.error('Error initializing app:', error);
+        // Show user-friendly error message
+        alert('Failed to connect to backend API. Please ensure the server is running at ' + (import.meta.env.VITE_API_URL || 'http://localhost:8000'));
       }
     };
 
     initApp();
 
-    // WebSocket listeners (these handle messages from mock API)
+    // WebSocket listeners for real-time updates
+    // 
+    // Edge Cases Handled:
+    // - Duplicate message prevention
+    // - Conversation switching during message receive
+    // - Missing conversation_id validation
+    // - Race conditions with API calls
+    // - Error handling for message reload
     const unsubscribeMessage = wsService.on('message.new', (data) => {
-      // Add all messages from WebSocket (both user and assistant)
-      dispatch(addMessage(data));
+      console.log('📨 WebSocket message.new received:', data);
+      
+      // Validation: Check required fields
+      if (!data || typeof data !== 'object') {
+        console.warn('WebSocket message is not a valid object, skipping', data);
+        return;
+      }
+      
+      if (!data.conversation_id || !data.id || !data.role) {
+        console.warn('WebSocket message missing required fields (conversation_id, id, or role), skipping', {
+          conversation_id: data.conversation_id,
+          id: data.id,
+          role: data.role
+        });
+        return;
+      }
+      
+      const conversationId = data.conversation_id;
+      const messageId = data.id;
+      
+      // Get current state
+      const currentState = store.getState();
+      const currentMessages = currentState.messages.messagesByConversation[conversationId] || [];
+      
+      // Check if message already exists (prevent duplicates)
+      // This handles cases where:
+      // - WebSocket receives duplicate messages
+      // - API response and WebSocket message arrive for same message
+      const messageExists = currentMessages.some(msg => msg.id === messageId);
+      if (messageExists) {
+        console.log(`📨 WebSocket: Message ${messageId} already exists, skipping`);
+        return;
+      }
+      
+      // Handle assistant messages
+      if (data.role === 'assistant') {
+        console.log('✅ Assistant response received via WebSocket');
+        console.log('📊 Current waitingForResponse state BEFORE clearing:', store.getState().messages.waitingForResponse);
+        
+        // Add the assistant message
+        dispatch(addMessage(data));
+        
+        // Clear waiting state to unblock input IMMEDIATELY
+        console.log(`🔓 Clearing waiting state for conversation ${conversationId}`);
+        dispatch(setWaitingForResponse({ conversationId, waiting: false }));
+        
+        // Verify it was cleared
+        const stateAfterClear = store.getState();
+        console.log('📊 Current waitingForResponse state AFTER clearing:', stateAfterClear.messages.waitingForResponse);
+        if (stateAfterClear.messages.waitingForResponse[conversationId]) {
+          console.error('❌ ERROR: Waiting state still true after clear!');
+        } else {
+          console.log('✅ Waiting state successfully cleared');
+        }
+        
+        // Reload all messages to ensure consistency
+        // This is a safety measure to handle any edge cases:
+        // - Messages arriving out of order
+        // - State inconsistencies
+        // - Multiple WebSocket connections
+        apiService.getMessages(conversationId)
+          .then(messages => {
+            // Double-check: conversation hasn't changed during async operation
+            const latestState = store.getState();
+            if (latestState.conversations.currentConversationId === conversationId) {
+              dispatch(setMessages({ conversationId, messages }));
+              
+              // Double-check: ensure waiting state is still cleared after setMessages
+              // This handles any edge cases where setMessages might have affected the state
+              const stateAfterSetMessages = store.getState();
+              if (stateAfterSetMessages.messages.waitingForResponse[conversationId]) {
+                console.log('⚠️ Waiting state still true after setMessages, clearing again...');
+                dispatch(setWaitingForResponse({ conversationId, waiting: false }));
+              } else {
+                console.log('✅ Waiting state cleared successfully after setMessages');
+              }
+            }
+          })
+          .catch(error => {
+            console.error('Error reloading messages after WebSocket:', error);
+            // Even if getMessages fails, ensure waiting state is cleared
+            const errorState = store.getState();
+            if (errorState.messages.waitingForResponse[conversationId]) {
+              console.log('⚠️ Error occurred, but ensuring waiting state is cleared...');
+              dispatch(setWaitingForResponse({ conversationId, waiting: false }));
+            }
+          });
+      } 
+      // Ignore user messages from WebSocket - we already have them from API response
+      // This matches mock API behavior where only assistant messages come via WebSocket
+      else if (data.role === 'user') {
+        console.log('📨 WebSocket: Ignoring user message (already have from API response)');
+        // Skip - user messages are already in state from API response
+        return;
+      } else {
+        console.warn('WebSocket message with unknown role:', data.role);
+      }
     });
 
     const unsubscribeJob = wsService.on('job.update', (data) => {
       dispatch(updateJob(data));
     });
-    
-    // Listen for mock events directly (for all messages)
-    const handleMockMessage = ((e: CustomEvent) => {
-      // Dispatch all messages from mock events
-      dispatch(addMessage(e.detail));
-    }) as EventListener;
-    
-    const handleMockJob = ((e: CustomEvent) => {
-      dispatch(updateJob(e.detail));
-    }) as EventListener;
-    
-    window.addEventListener('mock:message.new', handleMockMessage);
-    window.addEventListener('mock:job.update', handleMockJob);
+
+    // Monitor WebSocket connection and auto-reconnect if disconnected
+    const connectionMonitor = setInterval(() => {
+      if (!wsService.isConnected()) {
+        console.warn('⚠️ WebSocket disconnected, attempting reconnect...');
+        const token = apiService.getToken();
+        wsService.connect(token || undefined);
+      }
+    }, 5000); // Check every 5 seconds
 
     return () => {
+      clearInterval(connectionMonitor);
       unsubscribeMessage();
       unsubscribeJob();
       wsService.disconnect();
-      window.removeEventListener('mock:message.new', handleMockMessage);
-      window.removeEventListener('mock:job.update', handleMockJob);
     };
   }, [dispatch]);
 
@@ -122,6 +279,29 @@ const AppContent: React.FC = () => {
         <header className="app-header">
           <h1>Enterprise Chat</h1>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className="admin-button"
+              onClick={clearAllAndStartFresh}
+              title="Clear all conversations and start fresh"
+              style={{ backgroundColor: '#dc3545', color: 'white' }}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 6h18" />
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+              </svg>
+              Clear & Reset
+            </button>
             <button
               className="admin-button"
               onClick={() => {
