@@ -19,6 +19,7 @@ import { store, type RootState } from '@/store';
 import { apiService } from '@/services/apiService';
 import type { Message } from '@/types';
 import BlockRenderer from './BlockRenderer';
+import StreamingMessage from './StreamingMessage';
 
 const MessageList: React.FC = () => {
   const dispatch = useAppDispatch();
@@ -52,6 +53,11 @@ const MessageList: React.FC = () => {
   // Get waiting for response state
   const isWaitingForResponse = useAppSelector(
     (state) => currentConversationId ? (state.messages.waitingForResponse[currentConversationId] || false) : false
+  );
+  
+  // Get streaming message ID for current conversation
+  const streamingMessageId = useAppSelector(
+    (state) => currentConversationId ? (state.messages.streamingMessages[currentConversationId] || null) : null
   );
   
   // Track conversation loading state
@@ -196,31 +202,48 @@ const MessageList: React.FC = () => {
   // Render messages
   return (
     <div className="message-list">
-      {messages.map((message: Message, index: number) => (
-        <div 
-          key={`${message.id}-${message.created_at}-${index}`} 
-          className="message-container"
-        >
-          <div className={`message message-${message.role}`}>
-            <div className="message-avatar">
-              {message.role === 'user' ? 'U' : 'AI'}
-            </div>
-            <div className="message-content-wrapper">
-              <div className="message-content">
-                {message.content && (
-                  <div className="message-text">{message.content}</div>
-                )}
-                {message.blocks?.map((block, idx) => (
-                  <BlockRenderer key={`${message.id}-block-${idx}`} block={block} />
-                ))}
+      {messages.map((message: Message, index: number) => {
+        // Check if this message is currently being streamed
+        const isStreaming = message.id === streamingMessageId && message.role === 'assistant';
+        
+        // Use StreamingMessage component for streaming messages
+        if (isStreaming) {
+          return (
+            <StreamingMessage
+              key={`${message.id}-${message.created_at}-${index}`}
+              message={message}
+              isStreaming={true}
+            />
+          );
+        }
+        
+        // Regular message rendering
+        return (
+          <div 
+            key={`${message.id}-${message.created_at}-${index}`} 
+            className="message-container"
+          >
+            <div className={`message message-${message.role}`}>
+              <div className="message-avatar">
+                {message.role === 'user' ? 'U' : 'AI'}
+              </div>
+              <div className="message-content-wrapper">
+                <div className="message-content">
+                  {message.content && (
+                    <div className="message-text">{message.content}</div>
+                  )}
+                  {message.blocks?.map((block, idx) => (
+                    <BlockRenderer key={`${message.id}-block-${idx}`} block={block} />
+                  ))}
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
       
-      {/* Loading indicator when waiting for assistant response */}
-      {isWaitingForResponse && (
+      {/* Loading indicator when waiting for assistant response but no streaming message yet */}
+      {isWaitingForResponse && !streamingMessageId && (
         <div className="message-container">
           <div className="message message-assistant">
             <div className="message-avatar">AI</div>

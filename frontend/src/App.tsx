@@ -18,7 +18,16 @@ import {
   addConversation,
   setCurrentConversation,
 } from './store/slices/conversationsSlice';
-import { setMessages, addMessage, clearMessages, setWaitingForResponse } from './store/slices/messagesSlice';
+import { 
+  setMessages, 
+  addMessage, 
+  clearMessages, 
+  setWaitingForResponse,
+  startStreamingMessage,
+  appendStreamToken,
+  appendStreamChunk,
+  completeStreamingMessage
+} from './store/slices/messagesSlice';
 import { updateJob } from './store/slices/jobsSlice';
 // Use API service (switches between real and mock based on config)
 import { apiService } from './services/apiService';
@@ -33,39 +42,7 @@ const AppContent: React.FC = () => {
   const currentConversationId = useAppSelector(
     (state) => state.conversations.currentConversationId
   );
-  const messagesState = useAppSelector((state) => state.messages);
 
-  // Function to clear all conversations and start fresh
-  const clearAllAndStartFresh = async () => {
-    try {
-      // Clear Redux state
-      dispatch(setConversations([]));
-      dispatch(setCurrentConversation(null));
-      
-      // Clear all messages from Redux (iterate through all conversation IDs)
-      const conversationIds = Object.keys(messagesState.messagesByConversation).map(Number);
-      conversationIds.forEach(id => {
-        dispatch(clearMessages(id));
-      });
-      
-      // Create a fresh conversation
-      const conv = await apiService.createConversation('Main Chat');
-      dispatch(addConversation(conv));
-      dispatch(setCurrentConversation(conv.id));
-      
-      console.log('✅ All conversations cleared, fresh start initialized');
-    } catch (error) {
-      console.error('Error clearing conversations:', error);
-    }
-  };
-
-  // Expose to window for console access
-  useEffect(() => {
-    (window as any).clearAllConversations = clearAllAndStartFresh;
-    return () => {
-      delete (window as any).clearAllConversations;
-    };
-  }, []);
 
   useEffect(() => {
     console.log('🚀 Connecting to Python API backend');
@@ -255,6 +232,115 @@ const AppContent: React.FC = () => {
       dispatch(updateJob(data));
     });
 
+    // WebSocket listeners for streaming responses
+    // 
+    // Handles real-time token streaming from LLM:
+    // - message.stream.start: Initializes streaming message
+    // - message.stream.token: Appends individual token
+    // - message.stream.chunk: Appends chunk of tokens (more efficient)
+    // - message.stream.end: Finalizes message with blocks
+    
+    const unsubscribeStreamStart = wsService.on('message.stream.start', (data) => {
+      console.log('🌊 Streaming started:', data);
+      
+      if (!data || !data.conversation_id) {
+        console.warn('Invalid stream.start data:', data);
+        return;
+      }
+      
+      const conversationId = data.conversation_id;
+      const messageId = data.message_id;
+      
+      if (!messageId) {
+        console.warn('Stream start missing message_id:', data);
+        return;
+      }
+      
+      // Initialize streaming message
+      dispatch(startStreamingMessage({ conversationId, messageId }));
+      
+      // Ensure waiting state is set (streaming means we're waiting)
+      dispatch(setWaitingForResponse({ conversationId, waiting: true }));
+    });
+    
+    const unsubscribeStreamToken = wsService.on('message.stream.token', (data) => {
+      if (!data || !data.conversation_id || !data.token) {
+        console.warn('Invalid stream.token data:', data);
+        return;
+      }
+      
+      const conversationId = data.conversation_id;
+      const messageId = data.message_id;
+      const token = data.token;
+      
+      if (!messageId) {
+        console.warn('Stream token missing message_id:', data);
+        return;
+      }
+      
+      // Append token to streaming message
+      dispatch(appendStreamToken({ conversationId, messageId, token }));
+    });
+    
+    const unsubscribeStreamChunk = wsService.on('message.stream.chunk', (data) => {
+      if (!data || !data.conversation_id || !data.chunk) {
+        console.warn('Invalid stream.chunk data:', data);
+        return;
+      }
+      
+      const conversationId = data.conversation_id;
+      const messageId = data.message_id;
+      const chunk = data.chunk;
+      
+      if (!messageId) {
+        console.warn('Stream chunk missing message_id:', data);
+        return;
+      }
+      
+      // Append chunk to streaming message (more efficient than individual tokens)
+      dispatch(appendStreamChunk({ conversationId, messageId, chunk }));
+    });
+    
+    const unsubscribeStreamEnd = wsService.on('message.stream.end', (data) => {
+      console.log('🌊 Streaming ended:', data);
+      
+      if (!data || !data.conversation_id) {
+        console.warn('Invalid stream.end data:', data);
+        return;
+      }
+      
+      const conversationId = data.conversation_id;
+      const messageId = data.message_id;
+      const blocks = data.blocks || [];
+      
+      if (!messageId) {
+        console.warn('Stream end missing message_id:', data);
+        return;
+      }
+      
+      // Complete streaming message with blocks
+      dispatch(completeStreamingMessage({ conversationId, messageId, blocks }));
+      
+      // Clear waiting state
+      dispatch(setWaitingForResponse({ conversationId, waiting: false }));
+      
+      // Reload messages to ensure consistency
+      apiService.getMessages(conversationId)
+        .then(messages => {
+          const latestState = store.getState();
+          if (latestState.conversations.currentConversationId === conversationId) {
+            dispatch(setMessages({ conversationId, messages }));
+            // Ensure waiting state is cleared after reload
+            dispatch(setWaitingForResponse({ conversationId, waiting: false }));
+          }
+        })
+        .catch(error => {
+          console.error('Error reloading messages after stream end:', error);
+          // Ensure waiting state is cleared even on error
+          dispatch(setWaitingForResponse({ conversationId, waiting: false }));
+        });
+    });
+
     // Monitor WebSocket connection and auto-reconnect if disconnected
     const connectionMonitor = setInterval(() => {
       if (!wsService.isConnected()) {
@@ -268,6 +354,10 @@ const AppContent: React.FC = () => {
       clearInterval(connectionMonitor);
       unsubscribeMessage();
       unsubscribeJob();
+      unsubscribeStreamStart();
+      unsubscribeStreamToken();
+      unsubscribeStreamChunk();
+      unsubscribeStreamEnd();
       wsService.disconnect();
     };
   }, [dispatch]);
@@ -279,29 +369,6 @@ const AppContent: React.FC = () => {
         <header className="app-header">
           <h1>Enterprise Chat</h1>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
-              className="admin-button"
-              onClick={clearAllAndStartFresh}
-              title="Clear all conversations and start fresh"
-              style={{ backgroundColor: '#dc3545', color: 'white' }}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M3 6h18" />
-                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-              </svg>
-              Clear & Reset
-            </button>
             <button
               className="admin-button"
               onClick={() => {

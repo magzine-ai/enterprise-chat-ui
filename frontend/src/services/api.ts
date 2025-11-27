@@ -126,6 +126,45 @@ class ApiService {
   async getJob(jobId: string): Promise<Job> {
     return this.request<Job>(`/jobs/${jobId}`);
   }
+
+  // Splunk Query Execution
+  async executeSplunkQuery(
+    query: string,
+    earliestTime?: string,
+    latestTime?: string
+  ): Promise<{
+    columns: string[];
+    rows: any[][];
+    rowCount: number;
+    executionTime?: number;
+    visualizationType?: 'table' | 'chart' | 'single-value' | 'gauge' | 'map' | 'heatmap' | 'scatter';
+    visualizationConfig?: {
+      chartType?: 'line' | 'bar' | 'area' | 'pie' | 'column';
+      xAxis?: string;
+      yAxis?: string;
+      series?: string[];
+      format?: string;
+      valueField?: string;
+      labelField?: string;
+      unit?: string;
+    };
+    singleValue?: number;
+    gaugeValue?: number;
+    chartData?: any[];
+    isTimeSeries?: boolean;
+    allowChartTypeSwitch?: boolean;
+    error?: string;
+  }> {
+    return this.request('/splunk/execute', {
+      method: 'POST',
+      body: JSON.stringify({
+        query,
+        earliest_time: earliestTime,
+        latest_time: latestTime,
+        language: 'spl',
+      }),
+    });
+  }
 }
 
 export const apiService = new ApiService();

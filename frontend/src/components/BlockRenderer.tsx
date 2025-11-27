@@ -42,6 +42,7 @@ import React from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { Block } from '@/types';
+import { apiService } from '@/services/apiService';
 import ChartBlock from './ChartBlock';
 import AsyncPlaceholder from './AsyncPlaceholder';
 import PluginWidget from './PluginWidget';
@@ -124,11 +125,22 @@ const BlockRenderer: React.FC<BlockRendererProps> = ({ block }) => {
       );
 
     case 'query':
+      // Provide execute handler for Splunk queries
+      const handleExecute = block.data?.language === 'spl' 
+        ? async (query: string) => {
+            try {
+              return await apiService.executeSplunkQuery(query);
+            } catch (error: any) {
+              throw new Error(error.message || 'Failed to execute Splunk query');
+            }
+          }
+        : block.data?.onExecute; // Use provided handler for SQL or other languages
+      
       return (
         <QueryBlock
           query={block.data?.query || ''}
           language={block.data?.language || 'sql'}
-          onExecute={block.data?.onExecute}
+          onExecute={handleExecute}
           title={block.data?.title}
           autoExecute={block.data?.autoExecute || false}
         />

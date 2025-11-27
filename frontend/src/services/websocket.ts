@@ -72,6 +72,21 @@ export class WebSocketService {
     }
   }
 
+  /**
+   * Subscribe to WebSocket events
+   * 
+   * Supported event types:
+   * - 'message.new': New message received
+   * - 'job.update': Job status update
+   * - 'message.stream.start': Streaming response started
+   * - 'message.stream.token': Token received during streaming
+   * - 'message.stream.chunk': Chunk received during streaming
+   * - 'message.stream.end': Streaming response completed
+   * 
+   * @param event Event type to listen for
+   * @param callback Callback function to invoke when event is received
+   * @returns Unsubscribe function
+   */
   on(event: string, callback: (data: any) => void): () => void {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());

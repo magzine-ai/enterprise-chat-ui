@@ -67,7 +67,19 @@ export interface Conversation {
 }
 
 export interface WebSocketMessage {
-  type: 'message.new' | 'job.update' | 'ack';
+  type: 'message.new' | 'job.update' | 'ack' | 'message.stream.start' | 'message.stream.token' | 'message.stream.chunk' | 'message.stream.end';
   data: any;
+}
+
+/**
+ * Streaming message state for messages being streamed in real-time.
+ * Used to track messages that are currently being generated token by token.
+ */
+export interface StreamingMessage {
+  conversationId: number;
+  messageId?: number;
+  content: string;
+  blocks?: Block[];
+  isStreaming: boolean;
 }
 

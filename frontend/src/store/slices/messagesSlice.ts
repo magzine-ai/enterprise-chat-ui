@@ -17,18 +17,21 @@
  * - State mutations
  */
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import type { Message } from '@/types';
+import type { Message, Block } from '@/types';
 
 interface MessagesState {
   // Messages organized by conversation ID
   messagesByConversation: Record<number, Message[]>;
   // Track if waiting for assistant response per conversation
   waitingForResponse: Record<number, boolean>;
+  // Track streaming messages (conversationId -> messageId)
+  streamingMessages: Record<number, number | null>;
 }
 
 const initialState: MessagesState = {
   messagesByConversation: {},
   waitingForResponse: {},
+  streamingMessages: {},
 };
 
 /**
@@ -267,6 +270,188 @@ const messagesSlice = createSlice({
         waitingForResponse: newWaitingForResponse,
       };
     },
+    
+    /**
+     * Start streaming a message
+     * Initializes a placeholder message that will be updated as tokens arrive
+     */
+    startStreamingMessage: (
+      state,
+      action: PayloadAction<{ conversationId: number; messageId: number }>
+    ) => {
+      const { conversationId, messageId } = action.payload;
+      
+      // Create placeholder message for streaming
+      const streamingMessage: Message = {
+        id: messageId,
+        content: '',
+        role: 'assistant',
+        conversation_id: conversationId,
+        created_at: new Date().toISOString(),
+        blocks: [],
+      };
+      
+      // Add the placeholder message
+      const currentMessages = state.messagesByConversation[conversationId] || [];
+      const exists = currentMessages.some(msg => msg.id === messageId);
+      
+      if (!exists) {
+        // Create new messagesByConversation with streaming message
+        const newMessagesByConversation: Record<number, Message[]> = {};
+        for (const [id, msgs] of Object.entries(state.messagesByConversation)) {
+          const convId = Number(id);
+          if (convId !== conversationId) {
+            newMessagesByConversation[convId] = msgs;
+          }
+        }
+        newMessagesByConversation[conversationId] = [...currentMessages, streamingMessage];
+        
+        // Track streaming message
+        const newStreamingMessages: Record<number, number | null> = { ...state.streamingMessages };
+        newStreamingMessages[conversationId] = messageId;
+        
+        return {
+          ...state,
+          messagesByConversation: newMessagesByConversation,
+          streamingMessages: newStreamingMessages,
+        };
+      }
+      
+      return state;
+    },
+    
+    /**
+     * Append a token to a streaming message
+     * Updates the content of the message being streamed
+     */
+    appendStreamToken: (
+      state,
+      action: PayloadAction<{ conversationId: number; messageId: number; token: string }>
+    ) => {
+      const { conversationId, messageId, token } = action.payload;
+      
+      const messages = state.messagesByConversation[conversationId];
+      if (!messages) {
+        return state;
+      }
+      
+      // Find and update the streaming message
+      const updatedMessages = messages.map(msg => {
+        if (msg.id === messageId) {
+          return {
+            ...msg,
+            content: msg.content + token,
+          };
+        }
+        return msg;
+      });
+      
+      // Create new messagesByConversation with updated message
+      const newMessagesByConversation: Record<number, Message[]> = {};
+      for (const [id, msgs] of Object.entries(state.messagesByConversation)) {
+        const convId = Number(id);
+        if (convId !== conversationId) {
+          newMessagesByConversation[convId] = msgs;
+        }
+      }
+      newMessagesByConversation[conversationId] = updatedMessages;
+      
+      return {
+        ...state,
+        messagesByConversation: newMessagesByConversation,
+      };
+    },
+    
+    /**
+     * Append a chunk to a streaming message
+     * More efficient for batching multiple tokens
+     */
+    appendStreamChunk: (
+      state,
+      action: PayloadAction<{ conversationId: number; messageId: number; chunk: string }>
+    ) => {
+      const { conversationId, messageId, chunk } = action.payload;
+      
+      const messages = state.messagesByConversation[conversationId];
+      if (!messages) {
+        return state;
+      }
+      
+      // Find and update the streaming message
+      const updatedMessages = messages.map(msg => {
+        if (msg.id === messageId) {
+          return {
+            ...msg,
+            content: msg.content + chunk,
+          };
+        }
+        return msg;
+      });
+      
+      // Create new messagesByConversation with updated message
+      const newMessagesByConversation: Record<number, Message[]> = {};
+      for (const [id, msgs] of Object.entries(state.messagesByConversation)) {
+        const convId = Number(id);
+        if (convId !== conversationId) {
+          newMessagesByConversation[convId] = msgs;
+        }
+      }
+      newMessagesByConversation[conversationId] = updatedMessages;
+      
+      return {
+        ...state,
+        messagesByConversation: newMessagesByConversation,
+      };
+    },
+    
+    /**
+     * Complete streaming message
+     * Finalizes the message with blocks and marks streaming as complete
+     */
+    completeStreamingMessage: (
+      state,
+      action: PayloadAction<{ conversationId: number; messageId: number; blocks?: Block[] }>
+    ) => {
+      const { conversationId, messageId, blocks } = action.payload;
+      
+      const messages = state.messagesByConversation[conversationId];
+      if (!messages) {
+        return state;
+      }
+      
+      // Update message with blocks
+      const updatedMessages = messages.map(msg => {
+        if (msg.id === messageId) {
+          return {
+            ...msg,
+            blocks: blocks || [],
+          };
+        }
+        return msg;
+      });
+      
+      // Create new messagesByConversation with updated message
+      const newMessagesByConversation: Record<number, Message[]> = {};
+      for (const [id, msgs] of Object.entries(state.messagesByConversation)) {
+        const convId = Number(id);
+        if (convId !== conversationId) {
+          newMessagesByConversation[convId] = msgs;
+        }
+      }
+      newMessagesByConversation[conversationId] = updatedMessages;
+      
+      // Clear streaming message tracking
+      const newStreamingMessages: Record<number, number | null> = { ...state.streamingMessages };
+      if (newStreamingMessages[conversationId] === messageId) {
+        delete newStreamingMessages[conversationId];
+      }
+      
+      return {
+        ...state,
+        messagesByConversation: newMessagesByConversation,
+        streamingMessages: newStreamingMessages,
+      };
+    },
   },
 });
 
@@ -275,7 +460,11 @@ export const {
   addMessage, 
   removeMessage, 
   clearMessages, 
-  setWaitingForResponse 
+  setWaitingForResponse,
+  startStreamingMessage,
+  appendStreamToken,
+  appendStreamChunk,
+  completeStreamingMessage
 } = messagesSlice.actions;
 
 export default messagesSlice.reducer;

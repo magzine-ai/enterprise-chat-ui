@@ -1159,6 +1159,123 @@ What would you like to see an example of?`;
     localStorage.removeItem('messages');
     console.log('[Mock API] All conversations cleared, state reset');
   }
+
+  // Splunk Query Execution (Mock)
+  async executeSplunkQuery(
+    query: string,
+    earliestTime?: string,
+    latestTime?: string
+  ): Promise<{
+    columns: string[];
+    rows: any[][];
+    rowCount: number;
+    executionTime?: number;
+    visualizationType?: 'table' | 'chart' | 'single-value' | 'gauge' | 'map' | 'heatmap' | 'scatter';
+    visualizationConfig?: {
+      chartType?: 'line' | 'bar' | 'area' | 'pie' | 'column';
+      xAxis?: string;
+      yAxis?: string;
+      series?: string[];
+      format?: string;
+      valueField?: string;
+      labelField?: string;
+      unit?: string;
+    };
+    singleValue?: number;
+    gaugeValue?: number;
+    chartData?: any[];
+    isTimeSeries?: boolean;
+    allowChartTypeSwitch?: boolean;
+    error?: string;
+  }> {
+    await this.delay(500); // Simulate network delay
+    
+    const queryLower = query.toLowerCase();
+    
+    // Determine visualization type based on query
+    const isTimechart = queryLower.includes('timechart');
+    const isStats = queryLower.includes('stats');
+    const isSingleValue = (queryLower.includes('stats count') || queryLower.includes('stats sum')) && !queryLower.includes('by');
+    
+    if (isTimechart) {
+      // Time series chart
+      const hours = Array.from({ length: 24 }, (_, i) => i);
+      return {
+        columns: ['_time', 'count', 'errors'],
+        rows: hours.map(h => [`${h.toString().padStart(2, '0')}:00:00`, Math.floor(Math.random() * 1000) + 500, Math.floor(Math.random() * 50) + 10]),
+        rowCount: 24,
+        executionTime: 0.5,
+        visualizationType: 'chart',
+        visualizationConfig: {
+          chartType: 'line',
+          xAxis: '_time',
+          yAxis: 'count',
+          series: ['count', 'errors']
+        },
+        chartData: hours.map(h => ({
+          time: `${h.toString().padStart(2, '0')}:00:00`,
+          count: Math.floor(Math.random() * 1000) + 500,
+          errors: Math.floor(Math.random() * 50) + 10
+        })),
+        isTimeSeries: true,
+        allowChartTypeSwitch: true
+      };
+    } else if (isSingleValue) {
+      // Single value
+      return {
+        columns: ['count'],
+        rows: [[Math.floor(Math.random() * 10000) + 1000]],
+        rowCount: 1,
+        executionTime: 0.3,
+        visualizationType: 'single-value',
+        visualizationConfig: {
+          format: 'number',
+          valueField: 'count',
+          unit: ''
+        },
+        singleValue: Math.floor(Math.random() * 10000) + 1000,
+        isTimeSeries: false
+      };
+    } else if (isStats && queryLower.includes('by')) {
+      // Chart with grouping
+      const categories = ['Success', 'Warning', 'Error', 'Info'];
+      return {
+        columns: ['status', 'count'],
+        rows: categories.map(cat => [cat, Math.floor(Math.random() * 1000) + 100]),
+        rowCount: categories.length,
+        executionTime: 0.4,
+        visualizationType: 'chart',
+        visualizationConfig: {
+          chartType: 'bar',
+          xAxis: 'status',
+          yAxis: 'count',
+          labelField: 'status',
+          valueField: 'count'
+        },
+        chartData: categories.map(cat => ({
+          name: cat,
+          value: Math.floor(Math.random() * 1000) + 100
+        })),
+        isTimeSeries: false,
+        allowChartTypeSwitch: true
+      };
+    } else {
+      // Default table
+      return {
+        columns: ['_time', 'host', 'source', 'message'],
+        rows: Array.from({ length: 10 }, (_, i) => [
+          new Date(Date.now() - i * 60000).toISOString(),
+          `host-${i + 1}`,
+          `/var/log/app.log`,
+          `Sample log message ${i + 1}`
+        ]),
+        rowCount: 10,
+        executionTime: 0.6,
+        visualizationType: 'table',
+        isTimeSeries: false
+      };
+    }
+  }
 }
 
 export const mockApiService = new MockApiService();

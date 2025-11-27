@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import init_db
-from app.api import auth, conversations, jobs, websocket
+from app.api import auth, conversations, jobs, websocket, splunk
 from app.services.job_listener import listen_for_job_updates
 import asyncio
 
@@ -31,6 +31,7 @@ app.include_router(auth.router)
 app.include_router(conversations.router)
 app.include_router(jobs.router)
 app.include_router(websocket.router)
+app.include_router(splunk.router)
 
 
 @app.on_event("startup")

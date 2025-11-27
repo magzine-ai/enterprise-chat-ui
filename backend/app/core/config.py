@@ -44,6 +44,33 @@ class Settings(BaseSettings):
     # API Behavior
     mock_responses_enabled: bool = False  # Enable rich mock responses with blocks, charts, etc.
     
+    # OpenAI Configuration
+    openai_api_key: Optional[str] = None  # OpenAI API key (set via OPENAI_API_KEY env var)
+    openai_model: str = "gpt-4"  # Model name to use (gpt-4, gpt-3.5-turbo, etc.)
+    
+    # Streaming Configuration
+    streaming_enabled: bool = True  # Enable streaming responses when using LLM
+    max_conversation_history: int = 10  # Number of messages to include in LLM context
+    
+    # AWS OpenSearch Configuration
+    opensearch_host: Optional[str] = None  # OpenSearch cluster endpoint (e.g., "search-domain.us-east-1.es.amazonaws.com")
+    opensearch_index: Optional[str] = None  # Index name for document storage
+    opensearch_region: str = "us-east-1"  # AWS region
+    opensearch_use_aws_auth: bool = True  # Use AWS authentication (requires boto3 credentials)
+    opensearch_username: Optional[str] = None  # Basic auth username (for local dev)
+    opensearch_password: Optional[str] = None  # Basic auth password (for local dev)
+    opensearch_use_ssl: bool = True  # Use SSL for OpenSearch connection
+    opensearch_verify_certs: bool = True  # Verify SSL certificates
+    opensearch_use_vector_search: bool = True  # Enable vector similarity search
+    opensearch_context_top_k: int = 3  # Number of documents to retrieve for context
+    
+    # Splunk Configuration
+    splunk_host: Optional[str] = None  # Splunk instance hostname or IP
+    splunk_port: int = 8089  # Splunk management port
+    splunk_username: Optional[str] = None  # Splunk username
+    splunk_password: Optional[str] = None  # Splunk password
+    splunk_verify_ssl: bool = True  # Verify SSL certificates for Splunk connection
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
