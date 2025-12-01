@@ -20,7 +20,7 @@ export function formatSplunkQuery(query: string): string {
     const char = formatted[i];
     const prevChar = i > 0 ? formatted[i - 1] : '';
     
-    // Check if this is a pipe operator (not inside quotes)
+    // Check if this is a pipe operator (not escaped)
     if (char === '|' && prevChar !== '\\') {
       if (currentSegment.trim()) {
         segments.push(currentSegment.trim());
@@ -39,20 +39,23 @@ export function formatSplunkQuery(query: string): string {
   // Build formatted output with proper line breaks and indentation
   const lines: string[] = [];
   const indentSize = 2;
-  let currentIndent = 0;
+  let indentLevel = 0;
   const maxLineLength = 100;
 
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i];
     
     if (segment === '|') {
-      // Start new line with pipe and increase indent for next line
-      lines.push(' '.repeat(currentIndent) + '|');
-      currentIndent += indentSize;
+      // Pipe increases indent for the next command
+      indentLevel += indentSize;
     } else {
-      // Add the command/expression
-      const linePrefix = ' '.repeat(currentIndent);
-      const availableWidth = maxLineLength - currentIndent;
+      // Build the line: indent + (pipe if previous was pipe) + command
+      const hasPipe = i > 0 && segments[i - 1] === '|';
+      const indent = ' '.repeat(indentLevel);
+      const pipePart = hasPipe ? '| ' : '';
+      const lineStart = indent + pipePart;
+      const startLength = lineStart.length;
+      const availableWidth = maxLineLength - startLength;
       
       // If segment is too long, wrap it
       if (segment.length > availableWidth && segment.includes(' ')) {
@@ -60,11 +63,12 @@ export function formatSplunkQuery(query: string): string {
         let isFirstLine = true;
         
         while (remaining.length > 0) {
-          const indent = isFirstLine ? currentIndent : currentIndent + 4;
-          const width = maxLineLength - indent;
+          const currentIndent = isFirstLine ? startLength : indentLevel + indentSize + 4;
+          const width = maxLineLength - currentIndent;
           
           if (remaining.length <= width) {
-            lines.push(' '.repeat(indent) + remaining);
+            const prefix = isFirstLine ? lineStart : ' '.repeat(currentIndent);
+            lines.push(prefix + remaining);
             break;
           }
           
@@ -81,23 +85,25 @@ export function formatSplunkQuery(query: string): string {
           }
           
           if (breakPoint > 0) {
-            lines.push(' '.repeat(indent) + remaining.substring(0, breakPoint).trim());
+            const prefix = isFirstLine ? lineStart : ' '.repeat(currentIndent);
+            const lineContent = remaining.substring(0, breakPoint).trim();
+            lines.push(prefix + lineContent);
             remaining = remaining.substring(breakPoint).trim();
           } else {
             // Force break at width
-            lines.push(' '.repeat(indent) + remaining.substring(0, width));
+            const prefix = isFirstLine ? lineStart : ' '.repeat(currentIndent);
+            lines.push(prefix + remaining.substring(0, width));
             remaining = remaining.substring(width).trim();
           }
           
           isFirstLine = false;
         }
       } else {
-        // Segment fits on one line
-        lines.push(linePrefix + segment);
+        // Segment fits on one line - no extra spaces
+        lines.push(lineStart + segment);
       }
     }
   }
 
   return lines.join('\n');
 }
-
