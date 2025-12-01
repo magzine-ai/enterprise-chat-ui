@@ -9,99 +9,86 @@ export function formatSplunkQuery(query: string): string {
     return query;
   }
 
-  // Normalize whitespace first
-  let formatted = query.trim().replace(/\s+/g, ' ');
+  // Normalize whitespace - replace all whitespace with single spaces
+  let normalized = query.trim().replace(/\s+/g, ' ');
 
-  // Split by pipe operators (|) - the main separator in SPL
-  const segments: string[] = [];
-  let currentSegment = '';
+  // Simple approach: split by pipes and add line breaks
+  // Format: first line, then "| command" on subsequent lines with minimal indent
+  const parts = normalized.split(/(?<!\\)\|/).map(p => p.trim()).filter(p => p);
   
-  for (let i = 0; i < formatted.length; i++) {
-    const char = formatted[i];
-    const prevChar = i > 0 ? formatted[i - 1] : '';
-    
-    // Check if this is a pipe operator (not escaped)
-    if (char === '|' && prevChar !== '\\') {
-      if (currentSegment.trim()) {
-        segments.push(currentSegment.trim());
-      }
-      segments.push('|');
-      currentSegment = '';
-    } else {
-      currentSegment += char;
-    }
-  }
-  
-  if (currentSegment.trim()) {
-    segments.push(currentSegment.trim());
+  if (parts.length === 0) {
+    return query;
   }
 
-  // Build formatted output with proper line breaks and indentation
   const lines: string[] = [];
   const indentSize = 2;
-  let indentLevel = 0;
   const maxLineLength = 100;
 
-  for (let i = 0; i < segments.length; i++) {
-    const segment = segments[i];
+  // First part goes on first line (no pipe, no indent)
+  lines.push(parts[0]);
+
+  // Remaining parts go on new lines with indent and pipe
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i];
+    const indent = ' '.repeat(indentSize);
+    const line = indent + '| ' + part;
     
-    if (segment === '|') {
-      // Pipe increases indent for the next command
-      indentLevel += indentSize;
-    } else {
-      // Build the line: indent + (pipe if previous was pipe) + command
-      const hasPipe = i > 0 && segments[i - 1] === '|';
-      const indent = ' '.repeat(indentLevel);
-      const pipePart = hasPipe ? '| ' : '';
-      const lineStart = indent + pipePart;
-      const startLength = lineStart.length;
-      const availableWidth = maxLineLength - startLength;
+    // Check if line needs wrapping
+    if (line.length > maxLineLength && part.includes(' ')) {
+      // First line with pipe
+      const firstLinePrefix = indent + '| ';
+      const firstLineWidth = maxLineLength - firstLinePrefix.length;
       
-      // If segment is too long, wrap it
-      if (segment.length > availableWidth && segment.includes(' ')) {
-        let remaining = segment;
-        let isFirstLine = true;
+      let remaining = part;
+      let isFirstWrap = true;
+      
+      while (remaining.length > 0) {
+        const wrapIndent = isFirstWrap ? indentSize + 2 : indentSize + 6;
+        const wrapPrefix = ' '.repeat(wrapIndent);
+        const availableWidth = maxLineLength - wrapPrefix.length;
         
-        while (remaining.length > 0) {
-          const currentIndent = isFirstLine ? startLength : indentLevel + indentSize + 4;
-          const width = maxLineLength - currentIndent;
-          
-          if (remaining.length <= width) {
-            const prefix = isFirstLine ? lineStart : ' '.repeat(currentIndent);
-            lines.push(prefix + remaining);
+        if (remaining.length <= availableWidth) {
+          if (isFirstWrap) {
+            lines.push(firstLinePrefix + remaining);
+          } else {
+            lines.push(wrapPrefix + remaining);
+          }
+          break;
+        }
+        
+        // Find break point
+        let breakPoint = -1;
+        for (const bp of [', ', ' AND ', ' OR ', ' ']) {
+          const idx = remaining.lastIndexOf(bp, availableWidth);
+          if (idx > 0) {
+            breakPoint = idx + (bp === ' ' ? 1 : bp.length);
             break;
           }
-          
-          // Try to break at logical points: commas, AND, OR, or spaces
-          let breakPoint = -1;
-          const breakPoints = [', ', ' AND ', ' OR ', ' '];
-          
-          for (const bp of breakPoints) {
-            const idx = remaining.lastIndexOf(bp, width);
-            if (idx > 0) {
-              breakPoint = idx + (bp === ' ' ? 1 : bp.length);
-              break;
-            }
-          }
-          
-          if (breakPoint > 0) {
-            const prefix = isFirstLine ? lineStart : ' '.repeat(currentIndent);
-            const lineContent = remaining.substring(0, breakPoint).trim();
-            lines.push(prefix + lineContent);
-            remaining = remaining.substring(breakPoint).trim();
-          } else {
-            // Force break at width
-            const prefix = isFirstLine ? lineStart : ' '.repeat(currentIndent);
-            lines.push(prefix + remaining.substring(0, width));
-            remaining = remaining.substring(width).trim();
-          }
-          
-          isFirstLine = false;
         }
-      } else {
-        // Segment fits on one line - no extra spaces
-        lines.push(lineStart + segment);
+        
+        if (breakPoint > 0) {
+          const content = remaining.substring(0, breakPoint).trim();
+          if (isFirstWrap) {
+            lines.push(firstLinePrefix + content);
+          } else {
+            lines.push(wrapPrefix + content);
+          }
+          remaining = remaining.substring(breakPoint).trim();
+        } else {
+          const content = remaining.substring(0, availableWidth);
+          if (isFirstWrap) {
+            lines.push(firstLinePrefix + content);
+          } else {
+            lines.push(wrapPrefix + content);
+          }
+          remaining = remaining.substring(availableWidth).trim();
+        }
+        
+        isFirstWrap = false;
       }
+    } else {
+      // Line fits
+      lines.push(line);
     }
   }
 
