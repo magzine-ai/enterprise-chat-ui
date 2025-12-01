@@ -129,7 +129,7 @@ class LLMService:
         Raises:
             ValueError: If OpenAI client is not initialized
             Exception: If API call fails
-        """
+        ""
         if not self.client:
             raise ValueError("OpenAI client not initialized. Check API key configuration.")
         

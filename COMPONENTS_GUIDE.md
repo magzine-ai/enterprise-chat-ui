@@ -67,7 +67,7 @@ BlockRenderer (Main Router)
 {
   "type": "query",
   "data": {
-    "query": "index=web_logs | stats count by status",
+    "query": "index=web_logs_UI | stats count by status",
     "language": "spl",
     "autoExecute": true
   }
