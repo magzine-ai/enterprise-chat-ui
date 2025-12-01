@@ -3,23 +3,32 @@ Splunk Service for Query Execution and Result Processing.
 
 This service provides integration with Splunk to execute SPL queries
 and process results to determine appropriate visualization types.
+Uses the official splunk-sdk library for reliable connection handling.
 """
 
 from typing import Dict, Any, List, Optional
-import requests
-from requests.auth import HTTPBasicAuth
 from app.core.config import settings
 import json
 import re
 from datetime import datetime
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+try:
+    import splunklib.client as client
+    import splunklib.results as results
+    SPLUNK_SDK_AVAILABLE = True
+except ImportError:
+    SPLUNK_SDK_AVAILABLE = False
+    print("⚠️ splunk-sdk not installed. Install with: pip install splunk-sdk")
 
 
 class SplunkService:
     """
     Service for executing Splunk queries and processing results.
     
-    Handles connection to Splunk, query execution, and result analysis
-    to determine the best visualization type (chart, table, single-value, etc.).
+    Uses splunk-sdk for reliable connection and job management.
+    Handles result analysis to determine the best visualization type.
     """
     
     def __init__(self):
@@ -27,45 +36,61 @@ class SplunkService:
         Initialize Splunk service with connection configuration.
         
         Reads configuration from settings:
-        - splunk_host: Splunk instance URL
+        - splunk_host: Splunk instance hostname or IP
         - splunk_port: Splunk management port (default: 8089)
         - splunk_username: Splunk username
         - splunk_password: Splunk password
         - splunk_verify_ssl: Whether to verify SSL certificates
-        
-        Raises:
-            ValueError: If required configuration is missing
         """
+        if not SPLUNK_SDK_AVAILABLE:
+            print("⚠️ splunk-sdk not available - Splunk integration disabled")
+            self.service = None
+            return
+            
         self.host = settings.splunk_host
         self.port = settings.splunk_port
         self.username = settings.splunk_username
         self.password = settings.splunk_password
         self.verify_ssl = settings.splunk_verify_ssl
-        self.base_url = None
+        self.service = None
+        self._executor = ThreadPoolExecutor(max_workers=5)
         
         if not self.host:
             print("⚠️ Splunk not configured - query execution will be disabled")
             return
         
-        # Construct base URL
-        scheme = "https" if self.verify_ssl else "http"
-        self.base_url = f"{scheme}://{self.host}:{self.port}"
-        
         if not self.username or not self.password:
             print("⚠️ Splunk credentials not configured")
         else:
-            print(f"✅ Splunk service initialized for {self.base_url}")
+            print(f"✅ Splunk service will connect to {self.host}:{self.port}")
     
-    def _get_auth(self) -> Optional[HTTPBasicAuth]:
+    def _connect(self) -> client.Service:
         """
-        Get HTTP Basic Auth for Splunk requests.
+        Create and return a Splunk service connection.
         
         Returns:
-            HTTPBasicAuth: Authentication object or None if credentials not set
+            client.Service: Connected Splunk service instance
+            
+        Raises:
+            ValueError: If Splunk is not configured
+            Exception: If connection fails
         """
-        if self.username and self.password:
-            return HTTPBasicAuth(self.username, self.password)
-        return None
+        if not self.host or not self.username or not self.password:
+            raise ValueError("Splunk is not configured. Please set SPLUNK_HOST, SPLUNK_USERNAME, and SPLUNK_PASSWORD.")
+        
+        if self.service is None:
+            # Create service connection
+            self.service = client.connect(
+                host=self.host,
+                port=self.port,
+                username=self.username,
+                password=self.password,
+                scheme="https" if self.verify_ssl else "http",
+                verify=self.verify_ssl
+            )
+            print(f"✅ Connected to Splunk at {self.host}:{self.port}")
+        
+        return self.service
     
     async def execute_query(
         self,
@@ -76,6 +101,8 @@ class SplunkService:
     ) -> Dict[str, Any]:
         """
         Execute a Splunk query and return results.
+        
+        Uses splunk-sdk to handle job creation, polling, and result retrieval.
         
         Args:
             query: SPL query string to execute
@@ -88,140 +115,118 @@ class SplunkService:
                 - results: List of result rows
                 - fields: List of field names
                 - preview: Whether results are preview
-                - job_id: Search job ID (for async queries)
+                - job_id: Search job ID
         
         Raises:
             ValueError: If Splunk is not configured
-            requests.RequestException: If query execution fails
+            Exception: If query execution fails
         """
-        if not self.base_url or not self.username or not self.password:
-            raise ValueError("Splunk is not configured. Please set SPLUNK_HOST, SPLUNK_USERNAME, and SPLUNK_PASSWORD.")
+        if not SPLUNK_SDK_AVAILABLE:
+            raise ValueError("splunk-sdk is not installed. Install with: pip install splunk-sdk")
+        
+        # Connect to Splunk
+        service = self._connect()
         
         # Prepare search parameters
-        search_params = {
-            "search": f"search {query}",
+        # Note: Don't add "search" prefix if query already starts with it
+        search_query = query if query.strip().startswith("search ") else f"search {query}"
+        
+        search_kwargs = {
+            "search": search_query,
             "output_mode": output_mode,
             "count": 1000,  # Limit results
         }
         
         if earliest_time:
-            search_params["earliest_time"] = earliest_time
+            search_kwargs["earliest_time"] = earliest_time
         if latest_time:
-            search_params["latest_time"] = latest_time
+            search_kwargs["latest_time"] = latest_time
         
-        # Execute search job
-        search_url = f"{self.base_url}/services/search/jobs"
-        auth = self._get_auth()
+        # Execute search in thread pool (splunk-sdk is synchronous)
+        loop = asyncio.get_event_loop()
         
         try:
-            # Create search job (run in thread pool to avoid blocking)
-            import asyncio
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: requests.post(
-                    search_url,
-                    data=search_params,
-                    auth=auth,
-                    verify=self.verify_ssl,
-                    timeout=30
-                )
+            # Create search job and get results
+            job_results = await loop.run_in_executor(
+                self._executor,
+                lambda: self._execute_search_sync(service, search_kwargs)
             )
-            response.raise_for_status()
             
-            # Parse job ID from response
-            job_data = response.text
-            job_id_match = re.search(r'<sid>([^<]+)</sid>', job_data)
-            if not job_id_match:
-                raise ValueError("Failed to get job ID from Splunk response")
+            return job_results
             
-            job_id = job_id_match.group(1)
-            
-            # Wait for job to complete and get results
-            results = await self._wait_for_job_completion(job_id)
-            
-            return results
-            
-        except requests.RequestException as e:
+        except Exception as e:
             print(f"❌ Error executing Splunk query: {e}")
+            import traceback
+            print(traceback.format_exc())
             raise
     
-    async def _wait_for_job_completion(
+    def _execute_search_sync(
         self,
-        job_id: str,
-        max_wait: int = 60,
-        poll_interval: float = 0.5
+        service: client.Service,
+        search_kwargs: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Wait for Splunk search job to complete and retrieve results.
+        Synchronously execute search using splunk-sdk.
+        
+        This method runs in a thread pool to avoid blocking.
         
         Args:
-            job_id: Splunk search job ID
-            max_wait: Maximum time to wait in seconds
-            poll_interval: Time between status checks in seconds
-        
+            service: Connected Splunk service
+            search_kwargs: Search parameters
+            
         Returns:
-            Dict[str, Any]: Job results with fields and data
-        
-        Raises:
-            TimeoutError: If job doesn't complete within max_wait time
+            Dict[str, Any]: Query results
         """
-        import asyncio
-        import time
+        # Create search job
+        job = service.jobs.create(**search_kwargs)
+        job_id = job.sid
+        print(f"📊 Created Splunk job: {job_id}")
         
-        status_url = f"{self.base_url}/services/search/jobs/{job_id}"
-        results_url = f"{self.base_url}/services/search/jobs/{job_id}/results"
-        auth = self._get_auth()
+        # Wait for job to complete
+        while not job.is_done():
+            job.refresh()
+            # Check for errors
+            if hasattr(job, 'content') and job.content.get('dispatchState') == 'FAILED':
+                error_msg = job.content.get('messages', [{}])[0].get('text', 'Unknown error')
+                raise ValueError(f"Splunk job failed: {error_msg}")
         
-        start_time = time.time()
+        print(f"✅ Splunk job {job_id} completed")
         
-        while time.time() - start_time < max_wait:
-            # Check job status (run in thread pool to avoid blocking)
-            loop = asyncio.get_event_loop()
-            status_response = await loop.run_in_executor(
-                None,
-                lambda: requests.get(
-                    status_url,
-                    params={"output_mode": "json"},
-                    auth=auth,
-                    verify=self.verify_ssl,
-                    timeout=10
-                )
+        # Get results
+        result_stream = results.ResultsReader(
+            job.results(
+                output_mode=search_kwargs.get("output_mode", "json"),
+                count=search_kwargs.get("count", 1000)
             )
-            status_response.raise_for_status()
-            status_data = status_response.json()
-            
-            # Check if job is done
-            dispatch_state = status_data.get("entry", [{}])[0].get("content", {}).get("dispatchState", "")
-            
-            if dispatch_state == "DONE":
-                # Get results (run in thread pool)
-                results_response = await loop.run_in_executor(
-                    None,
-                    lambda: requests.get(
-                        results_url,
-                        params={"output_mode": "json", "count": 1000},
-                        auth=auth,
-                        verify=self.verify_ssl,
-                        timeout=10
-                    )
-                )
-                results_response.raise_for_status()
-                results_data = results_response.json()
-                
-                return {
-                    "results": results_data.get("results", []),
-                    "fields": [f.get("name") for f in results_data.get("fields", [])],
-                    "preview": results_data.get("preview", False),
-                    "job_id": job_id
-                }
-            elif dispatch_state in ["FAILED", "FINALIZING"]:
-                raise ValueError(f"Splunk job failed with state: {dispatch_state}")
-            
-            # Wait before next check
-            await asyncio.sleep(poll_interval)
+        )
         
-        raise TimeoutError(f"Splunk job {job_id} did not complete within {max_wait} seconds")
+        # Parse results
+        results_list = []
+        fields = set()
+        
+        for result in result_stream:
+            if isinstance(result, results.Message):
+                # Handle messages (errors, warnings)
+                if result.type == "ERROR":
+                    raise ValueError(f"Splunk error: {result.message}")
+                elif result.type == "WARN":
+                    print(f"⚠️ Splunk warning: {result.message}")
+                continue
+            
+            if isinstance(result, dict):
+                results_list.append(result)
+                fields.update(result.keys())
+        
+        # Get job properties
+        job.refresh()
+        is_done = job.is_done()
+        
+        return {
+            "results": results_list,
+            "fields": list(fields),
+            "preview": not is_done,  # Preview if job is not fully done
+            "job_id": job_id
+        }
     
     def analyze_result_type(
         self,
@@ -452,9 +457,13 @@ class SplunkService:
         Returns:
             bool: True if Splunk is configured and ready to use
         """
-        return self.base_url is not None and self.username is not None and self.password is not None
+        return (
+            SPLUNK_SDK_AVAILABLE and
+            self.host is not None and
+            self.username is not None and
+            self.password is not None
+        )
 
 
 # Global instance
 splunk_service = SplunkService()
-

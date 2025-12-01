@@ -22,5 +22,7 @@ boto3==1.34.0
 aws-requests-auth==0.4.3
 # HTTP requests (for Splunk integration)
 requests>=2.32.0
+# Splunk SDK
+splunk-sdk>=1.7.0
 
 
