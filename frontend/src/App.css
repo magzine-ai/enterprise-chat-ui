@@ -674,9 +674,12 @@ body {
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
   font-size: 0.875rem;
   line-height: 1.6;
-  overflow-x: auto;
+  overflow-x: auto; /* Keep for very long unbreakable strings */
   max-height: 500px;
   overflow-y: auto;
+  white-space: pre-wrap; /* Enable word wrapping */
+  word-wrap: break-word; /* Break long words */
+  word-break: break-all; /* Break at any character if needed */
 }
 
 .code-block code {
@@ -684,6 +687,9 @@ body {
   background: transparent;
   padding: 0;
   border-radius: 0;
+  white-space: pre-wrap; /* Enable word wrapping */
+  word-wrap: break-word; /* Break long words */
+  word-break: break-all; /* Break at any character if needed */
 }
 
 .code-copy-button {

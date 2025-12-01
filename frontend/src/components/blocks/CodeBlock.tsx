@@ -3,6 +3,7 @@
  * 
  * Displays code snippets with syntax highlighting and copy functionality.
  * Supports multiple languages including SQL, SPL (Splunk), Python, JavaScript, etc.
+ * Automatically formats Splunk queries for better readability.
  * 
  * @example
  * ```tsx
@@ -18,7 +19,8 @@
  * @param title - Optional title for the code block
  * @param showCopyButton - Whether to show copy button (default: true)
  */
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import { formatSplunkQuery } from '@/utils/splunkFormatter';
 
 interface CodeBlockProps {
   code: string;
@@ -35,9 +37,17 @@ const CodeBlock: React.FC<CodeBlockProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
 
+  // Format Splunk queries automatically
+  const formattedCode = useMemo(() => {
+    if (language === 'spl' || language === 'splunk') {
+      return formatSplunkQuery(code);
+    }
+    return code;
+  }, [code, language]);
+
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(code); // Copy original, not formatted
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -50,7 +60,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({
       {title && <div className="code-block-title">{title}</div>}
       <div className="code-block-container">
         <pre className={`code-block language-${language}`}>
-          <code>{code}</code>
+          <code>{formattedCode}</code>
         </pre>
         {showCopyButton && (
           <button className="code-copy-button" onClick={handleCopy} title="Copy code">
