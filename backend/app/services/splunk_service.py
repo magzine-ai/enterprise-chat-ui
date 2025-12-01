@@ -172,13 +172,21 @@ class SplunkService:
         
         Args:
             service: Connected Splunk service
-            search_kwargs: Search parameters
+            search_kwargs: Search parameters (must include 'search' key)
             
         Returns:
             Dict[str, Any]: Query results
         """
-        # Create search job
-        job = service.jobs.create(**search_kwargs)
+        # Extract search query (required as positional argument)
+        search_query = search_kwargs.get("search")
+        if not search_query:
+            raise ValueError("Search query is required")
+        
+        # Create a copy of kwargs without 'search' for keyword arguments
+        job_kwargs = {k: v for k, v in search_kwargs.items() if k != "search"}
+        
+        # Create search job - query is positional, other params are keyword args
+        job = service.jobs.create(search_query, **job_kwargs)
         job_id = job.sid
         print(f"📊 Created Splunk job: {job_id}")
         
