@@ -326,7 +326,7 @@ class SplunkService:
     
     def _format_time_for_chart(self, time_value: Any, user_timezone: Optional[str] = None) -> str:
         """
-        Format time value to local HH:MM format for chart display.
+        Format time value to local 12-hour format with AM/PM for chart display.
         
         Handles multiple input formats:
         - Unix epoch timestamp (float/int) - most common from Splunk JSON
@@ -338,7 +338,7 @@ class SplunkService:
             user_timezone: User's timezone (e.g., "America/New_York", "UTC")
         
         Returns:
-            str: Formatted time as HH:MM in user's timezone (or UTC if timezone not available)
+            str: Formatted time as "H:MM AM/PM" in user's timezone (e.g., "4:45 PM", "10:30 AM")
         """
         if not time_value:
             return ""
@@ -367,7 +367,12 @@ class SplunkService:
                     # Fallback: use UTC without timezone conversion
                     dt = datetime.utcfromtimestamp(float(time_value))
                     local_dt = dt
-                return local_dt.strftime("%H:%M")
+                # Format as 12-hour with AM/PM (e.g., "4:45 PM")
+                hour_12 = local_dt.hour % 12
+                if hour_12 == 0:
+                    hour_12 = 12
+                period = "AM" if local_dt.hour < 12 else "PM"
+                return f"{hour_12}:{local_dt.minute:02d} {period}"
         except (ValueError, TypeError, OSError) as e:
             pass
         
@@ -396,13 +401,30 @@ class SplunkService:
                             local_dt = dt.astimezone(tz)
                         else:
                             local_dt = dt
-                        return local_dt.strftime("%H:%M")
+                        # Format as 12-hour with AM/PM (e.g., "4:45 PM")
+                        hour_12 = local_dt.hour % 12
+                        if hour_12 == 0:
+                            hour_12 = 12
+                        period = "AM" if local_dt.hour < 12 else "PM"
+                        return f"{hour_12}:{local_dt.minute:02d} {period}"
                     except ValueError:
                         continue
                 
-                # Check if already in HH:MM format
-                if re.match(r'^\d{2}:\d{2}', time_value):
-                    return time_value[:5]  # Return HH:MM part
+                # Check if already in HH:MM or H:MM format
+                if re.match(r'^\d{1,2}:\d{2}', time_value):
+                    # Try to parse and reformat to 12-hour with AM/PM
+                    try:
+                        # Parse as 24-hour time
+                        time_part = time_value[:5]
+                        hour, minute = map(int, time_part.split(':'))
+                        # Convert to 12-hour format
+                        period = "AM" if hour < 12 else "PM"
+                        hour_12 = hour if hour <= 12 else hour - 12
+                        if hour_12 == 0:
+                            hour_12 = 12
+                        return f"{hour_12}:{minute:02d} {period}"
+                    except Exception:
+                        return time_value[:5]  # Return original if parsing fails
         except Exception:
             pass
         
@@ -417,8 +439,11 @@ class SplunkService:
     ) -> Dict[str, Any]:
         """Create configuration for time series chart with formatted time values."""
         time_fields = ["_time", "time", "timestamp", "date"]
+        # Filter out Splunk internal fields that shouldn't be displayed
+        internal_fields = ["_span", "_raw", "_time", "_indextime"]
         time_field = next((f for f in fields if f.lower() in time_fields), None)
-        value_fields = [f for f in fields if f.lower() not in time_fields]
+        # Exclude time fields and internal Splunk fields from value fields
+        value_fields = [f for f in fields if f.lower() not in time_fields and f.lower() not in internal_fields]
         
         chart_data = []
         for row in results:
