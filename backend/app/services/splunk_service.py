@@ -14,6 +14,20 @@ from datetime import datetime
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+# Timezone handling
+try:
+    from zoneinfo import ZoneInfo
+    HAS_ZONEINFO = True
+except ImportError:
+    # Fallback for Python < 3.9
+    try:
+        from backports.zoneinfo import ZoneInfo
+        HAS_ZONEINFO = True
+    except ImportError:
+        HAS_ZONEINFO = False
+        ZoneInfo = None
+        import time
+
 try:
     import splunklib.client as client
     import splunklib.results as results
@@ -97,7 +111,8 @@ class SplunkService:
         query: str,
         earliest_time: Optional[str] = None,
         latest_time: Optional[str] = None,
-        output_mode: str = "json"
+        output_mode: str = "json",
+        user_timezone: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Execute a Splunk query and return results.
@@ -252,7 +267,8 @@ class SplunkService:
         self,
         results: List[Dict[str, Any]],
         fields: List[str],
-        query: str
+        query: str,
+        user_timezone: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Analyze Splunk query results to determine visualization type.
@@ -282,7 +298,7 @@ class SplunkService:
         
         # Check for timechart command
         if "timechart" in query_lower:
-            return self._create_timechart_config(results, fields)
+            return self._create_timechart_config(results, fields, user_timezone)
         
         # Check for single value (stats count/sum/avg without by)
         if re.search(r'stats\s+(count|sum|avg|max|min)', query_lower) and "by" not in query_lower:
@@ -298,7 +314,7 @@ class SplunkService:
         has_time_field = any(field.lower() in time_fields for field in fields)
         
         if has_time_field and num_results > 1:
-            return self._create_timechart_config(results, fields)
+            return self._create_timechart_config(results, fields, user_timezone)
         
         # Default to table
         return {
@@ -308,12 +324,98 @@ class SplunkService:
             "isTimeSeries": False
         }
     
+    def _format_time_for_chart(self, time_value: Any, user_timezone: Optional[str] = None) -> str:
+        """
+        Format time value to local HH:MM format for chart display.
+        
+        Handles multiple input formats:
+        - Unix epoch timestamp (float/int) - most common from Splunk JSON
+        - ISO 8601 string
+        - Already formatted string (HH:MM or similar)
+        
+        Args:
+            time_value: Time value from Splunk (epoch, ISO, or string)
+            user_timezone: User's timezone (e.g., "America/New_York", "UTC")
+        
+        Returns:
+            str: Formatted time as HH:MM in user's timezone (or UTC if timezone not available)
+        """
+        if not time_value:
+            return ""
+        
+        # Determine timezone
+        if user_timezone and HAS_ZONEINFO:
+            try:
+                tz = ZoneInfo(user_timezone)
+            except Exception:
+                tz = ZoneInfo("UTC") if HAS_ZONEINFO else None
+        else:
+            tz = ZoneInfo("UTC") if HAS_ZONEINFO else None
+        
+        # Try to parse as epoch timestamp (most common from Splunk JSON)
+        try:
+            if isinstance(time_value, (int, float)):
+                # Splunk returns epoch in seconds
+                if HAS_ZONEINFO:
+                    dt = datetime.fromtimestamp(float(time_value), tz=ZoneInfo("UTC"))
+                    # Convert to user's timezone
+                    if tz:
+                        local_dt = dt.astimezone(tz)
+                    else:
+                        local_dt = dt
+                else:
+                    # Fallback: use UTC without timezone conversion
+                    dt = datetime.utcfromtimestamp(float(time_value))
+                    local_dt = dt
+                return local_dt.strftime("%H:%M")
+        except (ValueError, TypeError, OSError) as e:
+            pass
+        
+        # Try to parse as ISO 8601 string
+        try:
+            if isinstance(time_value, str):
+                # Try various ISO formats
+                iso_formats = [
+                    "%Y-%m-%dT%H:%M:%S.%fZ",
+                    "%Y-%m-%dT%H:%M:%SZ",
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%dT%H:%M:%S.%f%z"
+                ]
+                
+                for fmt in iso_formats:
+                    try:
+                        dt = datetime.strptime(time_value, fmt)
+                        # If no timezone info, assume UTC
+                        if 'Z' in fmt or ('+' not in time_value and '-' not in time_value[-6:]):
+                            if HAS_ZONEINFO:
+                                dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+                        # Convert to user timezone
+                        if HAS_ZONEINFO and tz and dt.tzinfo:
+                            local_dt = dt.astimezone(tz)
+                        else:
+                            local_dt = dt
+                        return local_dt.strftime("%H:%M")
+                    except ValueError:
+                        continue
+                
+                # Check if already in HH:MM format
+                if re.match(r'^\d{2}:\d{2}', time_value):
+                    return time_value[:5]  # Return HH:MM part
+        except Exception:
+            pass
+        
+        # Fallback: return as string
+        return str(time_value)
+    
     def _create_timechart_config(
         self,
         results: List[Dict[str, Any]],
-        fields: List[str]
+        fields: List[str],
+        user_timezone: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Create configuration for time series chart."""
+        """Create configuration for time series chart with formatted time values."""
         time_fields = ["_time", "time", "timestamp", "date"]
         time_field = next((f for f in fields if f.lower() in time_fields), None)
         value_fields = [f for f in fields if f.lower() not in time_fields]
@@ -323,8 +425,11 @@ class SplunkService:
             data_point: Dict[str, Any] = {}
             if time_field:
                 time_value = row.get(time_field, "")
-                # Format time value
-                data_point["time"] = str(time_value)
+                # Format time value as local HH:MM
+                formatted_time = self._format_time_for_chart(time_value, user_timezone)
+                data_point["time"] = formatted_time
+                # Keep original time for reference/sorting if needed
+                data_point["_original_time"] = time_value
             
             for field in value_fields:
                 data_point[field] = row.get(field, 0)
@@ -337,7 +442,8 @@ class SplunkService:
                 "chartType": "line",
                 "xAxis": time_field or "time",
                 "yAxis": value_fields[0] if value_fields else "value",
-                "series": value_fields
+                "series": value_fields,
+                "timeFormat": "HH:MM"  # Indicate format to frontend
             },
             "chartData": chart_data,
             "isTimeSeries": True,
@@ -416,7 +522,8 @@ class SplunkService:
     def format_query_result(
         self,
         splunk_result: Dict[str, Any],
-        query: str
+        query: str,
+        user_timezone: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Format Splunk query result for frontend consumption.
@@ -454,7 +561,7 @@ class SplunkService:
             rows.append(row)
         
         # Analyze visualization type
-        viz_config = self.analyze_result_type(results, fields, query)
+        viz_config = self.analyze_result_type(results, fields, query, user_timezone)
         
         return {
             "columns": fields,

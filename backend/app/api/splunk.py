@@ -22,6 +22,7 @@ class SplunkQueryRequest(BaseModel):
     language: str = "spl"  # For future SQL support
     conversation_id: Optional[int] = None  # Optional: Save results to conversation
     message_id: Optional[int] = None  # Optional: Update message with results
+    user_timezone: Optional[str] = None  # User's timezone (e.g., "America/New_York", "UTC")
 
 
 class SplunkQueryResponse(BaseModel):
@@ -108,13 +109,15 @@ async def execute_splunk_query(
         splunk_result = await splunk_service.execute_query(
             query=request.query,
             earliest_time=request.earliest_time,
-            latest_time=request.latest_time
+            latest_time=request.latest_time,
+            user_timezone=request.user_timezone
         )
         
         # Format result for frontend
         formatted_result = splunk_service.format_query_result(
             splunk_result=splunk_result,
-            query=request.query
+            query=request.query,
+            user_timezone=request.user_timezone
         )
         
         # Store or update result in database

@@ -157,6 +157,9 @@ class ApiService {
     allowChartTypeSwitch?: boolean;
     error?: string;
   }> {
+    // Get user's timezone for time formatting
+    const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    
     return this.request('/splunk/execute', {
       method: 'POST',
       body: JSON.stringify({
@@ -166,6 +169,7 @@ class ApiService {
         language: 'spl',
         conversation_id: conversationId,
         message_id: messageId,
+        user_timezone: userTimezone,
       }),
     });
   }
