@@ -77,7 +77,6 @@ const QueryBlock: React.FC<QueryBlockProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedQuery, setEditedQuery] = useState(query);
-  const [selectedChartType, setSelectedChartType] = useState<'line' | 'bar' | 'area' | 'column' | 'pie'>('line');
 
   useEffect(() => {
     if (autoExecute && onExecute) {
@@ -96,13 +95,6 @@ const QueryBlock: React.FC<QueryBlockProps> = ({
       setResult(initialResult);
     }
   }, [initialResult]);
-
-  useEffect(() => {
-    // Reset chart type to line when new time series result is loaded
-    if (result?.visualizationType === 'chart' && (result as any).isTimeSeries) {
-      setSelectedChartType('line');
-    }
-  }, [result]);
 
   const handleExecute = async () => {
     const queryToExecute = isEditing ? editedQuery : query;
@@ -498,61 +490,9 @@ const QueryBlock: React.FC<QueryBlockProps> = ({
           {/* Render visualization based on type */}
           {result.visualizationType === 'chart' && (result as any).chartData && (
             <div className="query-chart-container">
-              {/* Chart type selector for time series data and other charts */}
-              {((result as any).isTimeSeries || (result as any).allowChartTypeSwitch) && (
-                <div className="chart-type-selector">
-                  <span className="chart-type-label">Chart Type:</span>
-                  <div className="chart-type-buttons">
-                    <button
-                      className={`chart-type-btn ${selectedChartType === 'line' ? 'active' : ''}`}
-                      onClick={() => setSelectedChartType('line')}
-                      title="Line Chart"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 12 7 8 11 12 15 8 19 12 21 10"/>
-                      </svg>
-                      Line
-                    </button>
-                    <button
-                      className={`chart-type-btn ${selectedChartType === 'bar' ? 'active' : ''}`}
-                      onClick={() => setSelectedChartType('bar')}
-                      title="Bar Chart"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="12" y1="20" x2="12" y2="10"/>
-                        <line x1="18" y1="20" x2="18" y2="4"/>
-                        <line x1="6" y1="20" x2="6" y2="16"/>
-                      </svg>
-                      Bar
-                    </button>
-                    <button
-                      className={`chart-type-btn ${selectedChartType === 'area' ? 'active' : ''}`}
-                      onClick={() => setSelectedChartType('area')}
-                      title="Area Chart"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 12 7 8 11 12 15 8 19 12 21 10"/>
-                        <line x1="3" y1="20" x2="21" y2="20"/>
-                      </svg>
-                      Area
-                    </button>
-                    <button
-                      className={`chart-type-btn ${selectedChartType === 'column' ? 'active' : ''}`}
-                      onClick={() => setSelectedChartType('column')}
-                      title="Column Chart"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="18" y1="20" x2="18" y2="10"/>
-                        <line x1="12" y1="20" x2="12" y2="4"/>
-                        <line x1="6" y1="20" x2="6" y2="14"/>
-                      </svg>
-                      Column
-                    </button>
-                  </div>
-                </div>
-              )}
+              {/* Chart type selector is handled by SplunkChart component */}
               <SplunkChart
-                type={((result as any).isTimeSeries || (result as any).allowChartTypeSwitch) ? selectedChartType : ((result.visualizationConfig?.chartType as any) || 'line')}
+                type={(result.visualizationConfig?.chartType as any) || 'line'}
                 data={(result as any).chartData}
                 title={title || 'Query Results'}
                 xAxis={result.visualizationConfig?.xAxis || 'name'}
