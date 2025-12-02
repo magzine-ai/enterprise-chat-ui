@@ -131,7 +131,9 @@ class ApiService {
   async executeSplunkQuery(
     query: string,
     earliestTime?: string,
-    latestTime?: string
+    latestTime?: string,
+    conversationId?: number,
+    messageId?: number
   ): Promise<{
     columns: string[];
     rows: any[][];
@@ -162,6 +164,8 @@ class ApiService {
         earliest_time: earliestTime,
         latest_time: latestTime,
         language: 'spl',
+        conversation_id: conversationId,
+        message_id: messageId,
       }),
     });
   }

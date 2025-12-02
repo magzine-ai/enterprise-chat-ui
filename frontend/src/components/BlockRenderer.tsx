@@ -62,9 +62,11 @@ import DiagramViewer from './blocks/DiagramViewer';
 
 interface BlockRendererProps {
   block: Block;
+  conversationId?: number;
+  messageId?: number;
 }
 
-const BlockRenderer: React.FC<BlockRendererProps> = ({ block }) => {
+const BlockRenderer: React.FC<BlockRendererProps> = ({ block, conversationId, messageId }) => {
   switch (block.type) {
     case 'markdown': {
       const markdownContent = block.data?.content || '';
@@ -129,12 +131,21 @@ const BlockRenderer: React.FC<BlockRendererProps> = ({ block }) => {
       const handleExecute = block.data?.language === 'spl' 
         ? async (query: string) => {
             try {
-              return await apiService.executeSplunkQuery(query);
+              return await apiService.executeSplunkQuery(
+                query,
+                undefined, // earliestTime
+                undefined, // latestTime
+                conversationId,
+                messageId
+              );
             } catch (error: any) {
               throw new Error(error.message || 'Failed to execute Splunk query');
             }
           }
         : block.data?.onExecute; // Use provided handler for SQL or other languages
+      
+      // Check if results are already stored in the block
+      const existingResult = block.data?.result;
       
       return (
         <QueryBlock
@@ -143,6 +154,7 @@ const BlockRenderer: React.FC<BlockRendererProps> = ({ block }) => {
           onExecute={handleExecute}
           title={block.data?.title}
           autoExecute={block.data?.autoExecute || false}
+          initialResult={existingResult}
         />
       );
 

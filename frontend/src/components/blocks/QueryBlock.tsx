@@ -61,6 +61,7 @@ interface QueryBlockProps {
   onExecute?: (query: string) => Promise<QueryResult>;
   title?: string;
   autoExecute?: boolean;
+  initialResult?: QueryResult | null; // Results stored in message block
 }
 
 const QueryBlock: React.FC<QueryBlockProps> = ({
@@ -69,9 +70,10 @@ const QueryBlock: React.FC<QueryBlockProps> = ({
   onExecute,
   title,
   autoExecute = false,
+  initialResult = null,
 }) => {
   const [isExecuting, setIsExecuting] = useState(false);
-  const [result, setResult] = useState<QueryResult | null>(null);
+  const [result, setResult] = useState<QueryResult | null>(initialResult);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedQuery, setEditedQuery] = useState(query);
@@ -87,6 +89,13 @@ const QueryBlock: React.FC<QueryBlockProps> = ({
     // Update edited query when prop changes
     setEditedQuery(query);
   }, [query]);
+
+  useEffect(() => {
+    // Update result when initialResult changes (e.g., when message is reloaded)
+    if (initialResult) {
+      setResult(initialResult);
+    }
+  }, [initialResult]);
 
   useEffect(() => {
     // Reset chart type to line when new time series result is loaded

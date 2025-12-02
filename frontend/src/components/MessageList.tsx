@@ -233,7 +233,12 @@ const MessageList: React.FC = () => {
                     <div className="message-text">{message.content}</div>
                   )}
                   {message.blocks?.map((block, idx) => (
-                    <BlockRenderer key={`${message.id}-block-${idx}`} block={block} />
+                    <BlockRenderer 
+                      key={`${message.id}-block-${idx}`} 
+                      block={block}
+                      conversationId={currentConversationId || undefined}
+                      messageId={message.id}
+                    />
                   ))}
                 </div>
               </div>

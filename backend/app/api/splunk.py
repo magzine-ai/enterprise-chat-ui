@@ -8,6 +8,7 @@ from app.api.auth import get_current_user
 from app.core.database import get_session
 from app.services.splunk_service import splunk_service
 from app.models.splunk_query_result import SplunkQueryResult
+from app.models.message import Message
 import asyncio
 
 router = APIRouter(prefix="/splunk", tags=["splunk"])
@@ -19,6 +20,8 @@ class SplunkQueryRequest(BaseModel):
     earliest_time: Optional[str] = None
     latest_time: Optional[str] = None
     language: str = "spl"  # For future SQL support
+    conversation_id: Optional[int] = None  # Optional: Save results to conversation
+    message_id: Optional[int] = None  # Optional: Update message with results
 
 
 class SplunkQueryResponse(BaseModel):
@@ -168,6 +171,46 @@ async def execute_splunk_query(
         
         # Add result ID to response
         formatted_result["resultId"] = result_id
+        
+        # If conversation_id and message_id are provided, save results back to the message
+        if request.conversation_id and request.message_id:
+            try:
+                # Get the message
+                message = session.get(Message, request.message_id)
+                if message and message.conversation_id == request.conversation_id:
+                    # Get current blocks
+                    blocks = message.get_blocks()
+                    
+                    # Find and update the query block with results
+                    # Normalize queries for comparison (remove extra whitespace)
+                    normalized_request_query = " ".join(request.query.strip().split())
+                    updated = False
+                    
+                    for block in blocks:
+                        if block.get("type") == "query":
+                            block_query = block.get("data", {}).get("query", "")
+                            # Normalize block query for comparison
+                            normalized_block_query = " ".join(block_query.strip().split())
+                            
+                            # Match if queries are the same (after normalization) or if block has no result yet
+                            if normalized_block_query == normalized_request_query or not block.get("data", {}).get("result"):
+                                # Update the query block with results
+                                block["data"]["result"] = formatted_result
+                                block["data"]["resultId"] = result_id
+                                updated = True
+                                break
+                    
+                    if updated:
+                        # Save updated blocks back to message
+                        message.set_blocks(blocks)
+                        session.add(message)
+                        session.commit()
+                        print(f"✅ Updated message {request.message_id} with query results")
+            except Exception as e:
+                # Don't fail the request if message update fails
+                print(f"⚠️ Failed to update message with results: {e}")
+                import traceback
+                print(traceback.format_exc())
         
         return SplunkQueryResponse(**formatted_result)
         
