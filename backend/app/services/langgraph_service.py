@@ -268,7 +268,7 @@ async def execute_splunk_query(state: ConversationState) -> ConversationState:
             "query": query,
             "language": "spl",
             "title": "Splunk Query",
-            "autoExecute": True
+            "autoExecute": False
         }
     }
     

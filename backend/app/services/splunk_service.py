@@ -211,10 +211,14 @@ class SplunkService:
         # Parse results
         results_list = []
         fields = set()
+        result_count = 0
+        
+        print(f"📊 Processing results from Splunk job {job_id}...")
         
         for result in result_stream:
             if isinstance(result, results.Message):
                 # Handle messages (errors, warnings)
+                print(f"📨 Splunk message [{result.type}]: {result.message}")
                 if result.type == "ERROR":
                     raise ValueError(f"Splunk error: {result.message}")
                 elif result.type == "WARN":
@@ -222,8 +226,16 @@ class SplunkService:
                 continue
             
             if isinstance(result, dict):
+                result_count += 1
                 results_list.append(result)
                 fields.update(result.keys())
+                
+                # Log first few results for debugging
+                if result_count <= 3:
+                    print(f"📋 Result {result_count}: {json.dumps(result, indent=2, default=str)}")
+        
+        print(f"✅ Processed {result_count} results with {len(fields)} unique fields")
+        print(f"📊 Fields: {', '.join(sorted(fields))}")
         
         # Get job properties
         job.refresh()

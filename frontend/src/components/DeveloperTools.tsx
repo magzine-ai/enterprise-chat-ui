@@ -56,7 +56,7 @@ const COMPONENT_DOCS: ComponentInfo[] = [
       data: {
         query: 'SELECT * FROM users LIMIT 10',
         language: 'sql',
-        autoExecute: true
+        autoExecute: false
       }
     },
     usage: 'Execute and display query results'

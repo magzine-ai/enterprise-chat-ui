@@ -204,7 +204,7 @@ def _generate_blocks_for_response(user_message: str, user_lower: str) -> list[Di
                 "query": "index=cfs_digital_profilecore_hec_105961 \n| stats count by status\n| sort -count",
                 "language": "spl",
                 "title": "Splunk Query: Status Counts",
-                "autoExecute": True,
+                "autoExecute": False,
             },
         })
     

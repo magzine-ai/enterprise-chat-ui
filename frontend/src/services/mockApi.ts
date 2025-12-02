@@ -275,7 +275,7 @@ LIMIT 100;`,
 | sort -count`,
           language: 'spl',
           title: 'Splunk Query: Status Counts',
-          autoExecute: true,
+          autoExecute: false,
         },
       });
     }
