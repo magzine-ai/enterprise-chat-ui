@@ -430,17 +430,27 @@ class SplunkService:
                 data_point["time"] = formatted_time
                 # Keep original time for reference/sorting if needed
                 data_point["_original_time"] = time_value
+            else:
+                # If no time field found, create a placeholder
+                data_point["time"] = ""
             
             for field in value_fields:
                 data_point[field] = row.get(field, 0)
             
             chart_data.append(data_point)
         
+        # Sort by original time to ensure chronological order
+        if time_field:
+            try:
+                chart_data.sort(key=lambda x: x.get("_original_time", 0) if isinstance(x.get("_original_time"), (int, float)) else 0)
+            except Exception:
+                pass  # If sorting fails, keep original order
+        
         return {
             "visualizationType": "chart",
             "visualizationConfig": {
                 "chartType": "line",
-                "xAxis": time_field or "time",
+                "xAxis": "time",  # Always use "time" field (formatted), not original field name
                 "yAxis": value_fields[0] if value_fields else "value",
                 "series": value_fields,
                 "timeFormat": "HH:MM"  # Indicate format to frontend

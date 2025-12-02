@@ -559,6 +559,8 @@ const QueryBlock: React.FC<QueryBlockProps> = ({
                 yAxis={result.visualizationConfig?.yAxis || 'value'}
                 series={result.visualizationConfig?.series}
                 height={300}
+                isTimeSeries={(result as any).isTimeSeries || false}
+                allowChartTypeSwitch={(result as any).allowChartTypeSwitch || false}
               />
             </div>
           )}

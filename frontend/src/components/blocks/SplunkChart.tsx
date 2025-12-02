@@ -145,7 +145,13 @@ const SplunkChart: React.FC<SplunkChartProps> = ({
     }
 
     // For other chart types
-    const labels = data.map((item) => String(item[xAxisKey] || item.name || ''));
+    // For time series, ensure we use the formatted time field
+    const labels = data.map((item) => {
+      if (isTimeSeries && item['time']) {
+        return String(item['time']);  // Use formatted time field
+      }
+      return String(item[xAxisKey] || item.name || '');
+    });
 
     const datasets = dataKeys.map((key, idx) => {
       const isArea = renderType === 'area';
@@ -186,11 +192,16 @@ const SplunkChart: React.FC<SplunkChartProps> = ({
     },
     scales: type !== 'pie' ? {
       x: {
+        type: isTimeSeries ? 'category' : 'linear',  // Use category for time series to show labels as-is
         display: true,
         title: {
           display: true,
           text: xAxisKey,
         },
+        ticks: isTimeSeries ? {
+          maxRotation: 45,
+          minRotation: 0,
+        } : undefined,
       },
       y: {
         display: true,
