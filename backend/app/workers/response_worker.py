@@ -75,11 +75,13 @@ async def generate_assistant_response_async(job_id: str):
                     print(f"🔄 Using LangGraph for job {job_id}")
                     
                     # Convert message history to format expected by LangGraph
+                    # Include blocks (query results) in history for LLM context
                     history = []
                     for msg in recent_messages:
                         history.append({
                             "role": msg.role,
-                            "content": msg.content
+                            "content": msg.content,
+                            "blocks": msg.get_blocks()  # Include blocks with query results
                         })
                     
                     # Check if streaming is enabled and LLM is available

@@ -155,6 +155,94 @@ class LLMService:
             print(f"❌ Error generating response: {e}")
             raise
     
+    def _format_blocks_for_context(self, blocks: List[Dict[str, Any]]) -> str:
+        """
+        Format message blocks (especially query results) into readable text for LLM context.
+        
+        Args:
+            blocks: List of block objects from message
+        
+        Returns:
+            str: Formatted text representation of blocks
+        """
+        if not blocks:
+            return ""
+        
+        formatted_parts = []
+        
+        for block in blocks:
+            block_type = block.get("type", "")
+            block_data = block.get("data", {})
+            
+            if block_type == "query":
+                # Format query and results
+                query = block_data.get("query", "")
+                language = block_data.get("language", "spl")
+                result = block_data.get("result")
+                
+                formatted_parts.append(f"\n[Query ({language.upper()})]:")
+                formatted_parts.append(query)
+                
+                if result:
+                    # Include query execution results
+                    row_count = result.get("rowCount", 0)
+                    columns = result.get("columns", [])
+                    rows = result.get("rows", [])
+                    visualization_type = result.get("visualizationType")
+                    
+                    formatted_parts.append(f"\n[Query Results]: {row_count} row(s)")
+                    
+                    if columns and rows:
+                        # Format as a simple table (limit rows to avoid token bloat)
+                        max_rows_to_show = 10
+                        formatted_parts.append(f"Columns: {', '.join(columns)}")
+                        formatted_parts.append("Sample results:")
+                        
+                        for i, row in enumerate(rows[:max_rows_to_show]):
+                            row_str = " | ".join(str(val) for val in row)
+                            formatted_parts.append(f"  Row {i+1}: {row_str}")
+                        
+                        if len(rows) > max_rows_to_show:
+                            formatted_parts.append(f"  ... ({len(rows) - max_rows_to_show} more rows)")
+                    
+                    if visualization_type:
+                        formatted_parts.append(f"Visualization: {visualization_type}")
+                        if visualization_type == "chart" and result.get("chartData"):
+                            chart_data = result.get("chartData", [])
+                            if chart_data:
+                                formatted_parts.append(f"Chart data points: {len(chart_data)}")
+                                # Show first few data points
+                                for i, point in enumerate(chart_data[:3]):
+                                    formatted_parts.append(f"  Point {i+1}: {point}")
+                                if len(chart_data) > 3:
+                                    formatted_parts.append(f"  ... ({len(chart_data) - 3} more points)")
+                    
+                    if result.get("error"):
+                        formatted_parts.append(f"Error: {result.get('error')}")
+            
+            elif block_type == "table":
+                # Format table data
+                columns = block_data.get("columns", [])
+                rows = block_data.get("rows", [])
+                if columns and rows:
+                    formatted_parts.append(f"\n[Table]: {len(rows)} row(s)")
+                    formatted_parts.append(f"Columns: {', '.join(columns)}")
+                    for i, row in enumerate(rows[:5]):  # Limit to 5 rows
+                        row_str = " | ".join(str(val) for val in row)
+                        formatted_parts.append(f"  Row {i+1}: {row_str}")
+            
+            elif block_type == "code":
+                # Include code snippets
+                code = block_data.get("code", "")
+                language = block_data.get("language", "")
+                if code:
+                    formatted_parts.append(f"\n[Code ({language})]:")
+                    formatted_parts.append(code[:500])  # Limit code length
+                    if len(code) > 500:
+                        formatted_parts.append("  ... (truncated)")
+        
+        return "\n".join(formatted_parts)
+    
     def _build_messages(
         self,
         user_message: str,
@@ -165,10 +253,11 @@ class LLMService:
         
         Converts internal message format to OpenAI's expected format,
         including system prompt for Splunk Genie context.
+        Includes query execution results from message blocks in the context.
         
         Args:
             user_message: Current user message
-            conversation_history: Previous messages in conversation
+            conversation_history: Previous messages in conversation (may include 'blocks' field)
         
         Returns:
             List[Dict[str, str]]: Messages in OpenAI format
@@ -190,6 +279,12 @@ When users ask for data analysis or queries, you can:
 2. Explain what the query does
 3. Suggest visualizations for the results
 
+You have access to previous query execution results in the conversation history. Use these results to:
+- Answer follow-up questions about the data
+- Provide insights based on the query results
+- Suggest refinements to queries based on results
+- Explain patterns or trends in the data
+
 Format your responses naturally, and when including code or queries, use clear formatting.
 If you generate a Splunk query, you can indicate it should be executed by the system."""
         
@@ -205,10 +300,21 @@ If you generate a Splunk query, you can indicate it should be executed by the sy
         for msg in recent_history:
             role = msg.get("role", "user")
             content = msg.get("content", "")
+            blocks = msg.get("blocks", [])
+            
             if role in ["user", "assistant"] and content:
+                # Build enhanced content with blocks information
+                enhanced_content = content
+                
+                # Add formatted blocks (query results, tables, etc.) to context
+                if blocks:
+                    blocks_text = self._format_blocks_for_context(blocks)
+                    if blocks_text:
+                        enhanced_content = f"{content}\n{blocks_text}"
+                
                 messages.append({
                     "role": role,
-                    "content": content
+                    "content": enhanced_content
                 })
         
         # Add current user message

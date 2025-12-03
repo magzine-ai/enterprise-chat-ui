@@ -433,12 +433,45 @@ const DiagramViewer: React.FC<DiagramViewerProps> = ({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
-        {isLoading ? (
-          <div className="diagram-loading">Loading diagram...</div>
-        ) : error ? (
-          <div className="diagram-error">Error: {error}</div>
+        {/* Always render the diagram container so refs are available */}
+        {type === 'mermaid' ? (
+          <div className="diagram-mermaid">
+            <div 
+              ref={mermaidRef}
+              className="diagram-mermaid-container"
+              style={{ minHeight: '200px' }}
+            />
+            {isLoading && (
+              <div className="diagram-loading">Loading diagram...</div>
+            )}
+            {error && (
+              <div className="diagram-error">
+                Error rendering diagram: {error}
+                <details style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>
+                  <summary>Show diagram code</summary>
+                  <pre style={{ 
+                    marginTop: '0.5rem', 
+                    padding: '0.5rem', 
+                    background: 'var(--bg-secondary)', 
+                    borderRadius: '4px',
+                    overflow: 'auto'
+                  }}>
+                    {diagram}
+                  </pre>
+                </details>
+              </div>
+            )}
+          </div>
         ) : (
-          renderDiagram()
+          <>
+            {isLoading ? (
+              <div className="diagram-loading">Loading diagram...</div>
+            ) : error ? (
+              <div className="diagram-error">Error: {error}</div>
+            ) : (
+              renderDiagram()
+            )}
+          </>
         )}
       </div>
     </div>
