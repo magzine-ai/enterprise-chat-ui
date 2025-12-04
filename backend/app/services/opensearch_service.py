@@ -248,6 +248,281 @@ class OpenSearchService:
             bool: True if OpenSearch client is initialized and ready
         """
         return self.client is not None and self.host is not None
+    
+    async def ensure_java_index_exists(self) -> bool:
+        """
+        Ensure the Java code chunks index exists with proper mapping.
+        
+        Returns:
+            bool: True if index exists or was created successfully
+        """
+        if not self.client:
+            return False
+        
+        if not settings.java_opensearch_enabled:
+            return False
+        
+        index_name = settings.java_opensearch_index
+        
+        try:
+            # Check if index exists
+            if self.client.indices.exists(index=index_name):
+                print(f"✅ Java code chunks index '{index_name}' already exists")
+                return True
+            
+            # Create index with mapping for Java chunks
+            # Determine embedding dimension based on model
+            embedding_dim = 1536  # Default for text-embedding-3-small
+            if "large" in settings.java_embedding_model:
+                embedding_dim = 3072
+            elif "ada" in settings.java_embedding_model:
+                embedding_dim = 1536
+            
+            mapping = {
+                "mappings": {
+                    "properties": {
+                        "chunk_id": {"type": "keyword"},
+                        "repository_id": {"type": "keyword"},
+                        "type": {"type": "keyword"},  # method, class, file, module
+                        "fqn": {"type": "keyword"},  # Fully qualified name
+                        "file_path": {"type": "keyword"},
+                        "start_line": {"type": "integer"},
+                        "end_line": {"type": "integer"},
+                        "code": {"type": "text"},  # Full source code
+                        "summary": {"type": "text"},  # Generated summary
+                        "embedding": {
+                            "type": "knn_vector",
+                            "dimension": embedding_dim,
+                            "method": {
+                                "name": "hnsw",
+                                "space_type": "cosinesimil",
+                                "engine": "nmslib"
+                            }
+                        },
+                        "imports": {"type": "keyword"},  # Array of imports
+                        "annotations": {"type": "keyword"},  # Array of annotations
+                        "callers": {"type": "keyword"},  # Array of caller FQNs
+                        "callees": {"type": "keyword"},  # Array of callee FQNs
+                        "implemented_interfaces": {"type": "keyword"},
+                        "extended_class": {"type": "keyword"},
+                        "test_references": {"type": "keyword"},
+                        "last_modified": {"type": "date"},
+                        "created_at": {"type": "date"}
+                    }
+                }
+            }
+            
+            self.client.indices.create(index=index_name, body=mapping)
+            print(f"✅ Created Java code chunks index '{index_name}' with {embedding_dim}D embeddings")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error ensuring Java index exists: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return False
+    
+    async def index_java_chunk(
+        self,
+        chunk_id: int,
+        repository_id: int,
+        chunk_type: str,
+        fqn: str,
+        file_path: str,
+        start_line: int,
+        end_line: int,
+        code: str,
+        summary: Optional[str],
+        embedding: List[float],
+        imports: Optional[List[str]] = None,
+        annotations: Optional[List[str]] = None,
+        callers: Optional[List[str]] = None,
+        callees: Optional[List[str]] = None,
+        implemented_interfaces: Optional[List[str]] = None,
+        extended_class: Optional[str] = None,
+        test_references: Optional[List[str]] = None,
+        last_modified: Optional[str] = None
+    ) -> bool:
+        """
+        Index a Java code chunk in OpenSearch.
+        
+        Args:
+            chunk_id: Database chunk ID
+            repository_id: Repository ID
+            chunk_type: Chunk type (method, class, file, module)
+            fqn: Fully qualified name
+            file_path: File path
+            start_line: Starting line number
+            end_line: Ending line number
+            code: Source code
+            summary: Generated summary
+            embedding: Vector embedding
+            imports: List of imports
+            annotations: List of annotations
+            callers: List of caller FQNs
+            callees: List of callee FQNs
+            implemented_interfaces: List of implemented interfaces
+            extended_class: Extended class name
+            test_references: List of test references
+            last_modified: Last modification timestamp
+        
+        Returns:
+            bool: True if indexing succeeded
+        """
+        if not self.client:
+            return False
+        
+        if not settings.java_opensearch_enabled:
+            return False
+        
+        try:
+            # Ensure index exists
+            await self.ensure_java_index_exists()
+            
+            document = {
+                "chunk_id": chunk_id,
+                "repository_id": repository_id,
+                "type": chunk_type,
+                "fqn": fqn,
+                "file_path": file_path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "code": code,
+                "summary": summary or "",
+                "embedding": embedding,
+                "imports": imports or [],
+                "annotations": annotations or [],
+                "callers": callers or [],
+                "callees": callees or [],
+                "implemented_interfaces": implemented_interfaces or [],
+                "extended_class": extended_class or "",
+                "test_references": test_references or [],
+                "last_modified": last_modified,
+                "created_at": "now"
+            }
+            
+            # Use chunk_id as document ID for easy updates
+            self.client.index(
+                index=settings.java_opensearch_index,
+                id=str(chunk_id),
+                body=document
+            )
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error indexing Java chunk {chunk_id} in OpenSearch: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return False
+    
+    async def delete_java_chunks_by_repository(self, repository_id: int) -> bool:
+        """
+        Delete all chunks for a repository from OpenSearch.
+        
+        Args:
+            repository_id: Repository ID
+        
+        Returns:
+            bool: True if deletion succeeded
+        """
+        if not self.client:
+            return False
+        
+        if not settings.java_opensearch_enabled:
+            return False
+        
+        try:
+            query = {
+                "query": {
+                    "term": {"repository_id": repository_id}
+                }
+            }
+            
+            self.client.delete_by_query(
+                index=settings.java_opensearch_index,
+                body=query
+            )
+            
+            print(f"✅ Deleted chunks for repository {repository_id} from OpenSearch")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error deleting chunks for repository {repository_id}: {e}")
+            return False
+    
+    async def delete_java_chunk(self, chunk_id: int) -> bool:
+        """
+        Delete a specific chunk from OpenSearch.
+        
+        Args:
+            chunk_id: Chunk ID
+        
+        Returns:
+            bool: True if deletion succeeded
+        """
+        if not self.client:
+            return False
+        
+        if not settings.java_opensearch_enabled:
+            return False
+        
+        try:
+            self.client.delete(
+                index=settings.java_opensearch_index,
+                id=str(chunk_id)
+            )
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error deleting chunk {chunk_id} from OpenSearch: {e}")
+            return False
+    
+    async def update_java_chunk_relationships(
+        self,
+        chunk_id: int,
+        callers: Optional[List[str]] = None,
+        callees: Optional[List[str]] = None
+    ) -> bool:
+        """
+        Update relationship fields (callers/callees) for a chunk in OpenSearch.
+        
+        Args:
+            chunk_id: Chunk ID
+            callers: Updated list of caller FQNs
+            callees: Updated list of callee FQNs
+        
+        Returns:
+            bool: True if update succeeded
+        """
+        if not self.client:
+            return False
+        
+        if not settings.java_opensearch_enabled:
+            return False
+        
+        try:
+            update_doc = {}
+            if callers is not None:
+                update_doc["callers"] = callers
+            if callees is not None:
+                update_doc["callees"] = callees
+            
+            if not update_doc:
+                return True  # Nothing to update
+            
+            self.client.update(
+                index=settings.java_opensearch_index,
+                id=str(chunk_id),
+                body={"doc": update_doc}
+            )
+            
+            return True
+            
+        except Exception as e:
+            # Chunk might not exist in OpenSearch yet, which is okay
+            print(f"⚠️ Could not update relationships for chunk {chunk_id} in OpenSearch: {e}")
+            return False
 
 
 # Global instance

@@ -12,6 +12,7 @@
 import React, { useState, useMemo } from 'react';
 import SplunkOnboarding from './onboarding/SplunkOnboarding';
 import GrafanaOnboarding from './onboarding/GrafanaOnboarding';
+import JavaRepositoryOnboarding from './onboarding/JavaRepositoryOnboarding';
 import './Marketplace.css';
 
 interface OnboardingComponent {
@@ -106,6 +107,20 @@ const ONBOARDING_COMPONENTS: OnboardingComponent[] = [
     estimatedTime: '12-18 min',
     difficulty: 'Intermediate',
   },
+  {
+    id: 'java',
+    name: 'Java Code Intelligence',
+    description: 'Index and search Java codebases with AI-powered code intelligence',
+    longDescription: 'Register Java repositories, index code with AST extraction, and ask questions about your codebase using natural language.',
+    icon: '☕',
+    category: 'Code Intelligence',
+    color: '#F89820',
+    gradient: 'linear-gradient(135deg, #F89820 0%, #D97706 100%)',
+    featured: true,
+    tags: ['Java', 'Code Intelligence', 'AST', 'Search'],
+    estimatedTime: '5-10 min',
+    difficulty: 'Beginner',
+  },
 ];
 
 type ViewMode = 'marketplace' | 'onboarding';
@@ -152,6 +167,17 @@ const Marketplace: React.FC = () => {
     if (selectedComponent === 'grafana') {
       return <GrafanaOnboarding onBack={handleBackToMarketplace} />;
     }
+    if (selectedComponent === 'java') {
+      return (
+        <JavaRepositoryOnboarding
+          onBack={handleBackToMarketplace}
+          onRepositoryIndexed={(repo) => {
+            // After repository is indexed, navigate to repositories page
+            window.location.href = '/java-repositories.html';
+          }}
+        />
+      );
+    }
   }
 
   return (
@@ -191,6 +217,19 @@ const Marketplace: React.FC = () => {
           <p className="marketplace-hero-subtitle">
             Discover and configure integration components to enhance your infrastructure
           </p>
+
+          {/* Quick Actions */}
+          <div className="marketplace-quick-actions">
+            <button
+              className="quick-action-button"
+              onClick={() => {
+                window.location.href = '/java-repositories.html';
+              }}
+            >
+              <span>☕</span>
+              View Java Repositories
+            </button>
+          </div>
           
           {/* Search Bar */}
           <div className="marketplace-search-container">

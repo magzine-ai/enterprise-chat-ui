@@ -129,7 +129,7 @@ class LLMService:
         Raises:
             ValueError: If OpenAI client is not initialized
             Exception: If API call fails
-        ""
+        """
         if not self.client:
             raise ValueError("OpenAI client not initialized. Check API key configuration.")
         
@@ -251,7 +251,7 @@ class LLMService:
         """
         Build message list for OpenAI API from conversation history.
         
-        Converts internal message format to OpenAI's expected format,
+        Converts internal message format to OpenAI expected format,
         including system prompt for Splunk Genie context.
         Includes query execution results from message blocks in the context.
         
@@ -286,7 +286,8 @@ You have access to previous query execution results in the conversation history.
 - Explain patterns or trends in the data
 
 Format your responses naturally, and when including code or queries, use clear formatting.
-If you generate a Splunk query, you can indicate it should be executed by the system."""
+If you generate a Splunk query, you can indicate it should be executed by the system.
+"""
         
         messages.append({
             "role": "system",
@@ -470,4 +471,6 @@ If you generate a Splunk query, you can indicate it should be executed by the sy
 
 # Global instance
 llm_service = LLMService()
+
+
 

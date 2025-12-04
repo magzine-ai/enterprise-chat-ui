@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/chat.db"
     
     # CORS
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]
     
     # API Behavior
     mock_responses_enabled: bool = False  # Enable rich mock responses with blocks, charts, etc.
@@ -70,6 +70,15 @@ class Settings(BaseSettings):
     splunk_username: Optional[str] = None  # Splunk username
     splunk_password: Optional[str] = None  # Splunk password
     splunk_verify_ssl: bool = True  # Verify SSL certificates for Splunk connection
+    
+    # Java Code Intelligence Configuration
+    java_indexer_enabled: bool = False  # Enable Java code indexing
+    java_repositories_path: str = "./repositories"  # Base path for Java repositories
+    java_indexer_batch_size: int = 100  # Batch size for processing chunks
+    java_embedding_model: str = "text-embedding-3-small"  # Embedding model for code chunks
+    java_max_chunk_size: int = 1000  # Maximum characters per chunk
+    java_opensearch_index: str = "java_code_chunks"  # OpenSearch index for Java chunks
+    java_opensearch_enabled: bool = False  # Enable OpenSearch integration for Java code intelligence
     
     class Config:
         env_file = ".env"

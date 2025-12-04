@@ -28,6 +28,7 @@ Enterprise Chat UI is a modern, production-ready chat application built with Rea
 - **Multi-Conversation Management**: Create, search, and organize multiple chat conversations
 - **Rich Content Blocks**: Support for charts, tables, code, queries, forms, and more
 - **Splunk Integration**: Specialized components for Splunk query execution and visualization
+- **Java Code Intelligence**: AI-powered code understanding, indexing, and Q&A for Java codebases
 - **Real-time Updates**: WebSocket support for live message and job updates
 - **Mock Services**: Frontend-only development mode with in-memory data
 - **Administration Marketplace**: Component marketplace for onboarding and integrations
@@ -717,6 +718,24 @@ For issues or questions:
 2. Review existing code examples
 3. Check browser console for errors
 4. Review Redux DevTools for state issues
+
+---
+
+## 📚 Additional Documentation
+
+### Java Code Intelligence
+
+For comprehensive documentation on the Java Code Intelligence feature, including:
+- Architecture and design
+- API documentation
+- Sequence diagrams
+- Usage examples
+- Troubleshooting
+
+See: [Java Code Intelligence README](./backend/JAVA_CODE_INTELLIGENCE_README.md)
+
+For detailed system flow diagrams:
+- [Java Code Intelligence Flow Diagram](./JAVA_CODE_INTELLIGENCE_FLOW.md)
 
 ---
 

@@ -24,5 +24,8 @@ aws-requests-auth==0.4.3
 requests>=2.32.0
 # Splunk SDK
 splunk-sdk>=1.7.0
+# Java Code Intelligence dependencies
+javalang>=0.13.0
+networkx>=3.0
 
 

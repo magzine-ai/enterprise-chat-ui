@@ -34,6 +34,8 @@ try:
     SPLUNK_SDK_AVAILABLE = True
 except ImportError:
     SPLUNK_SDK_AVAILABLE = False
+    client = None
+    results = None
     print("⚠️ splunk-sdk not installed. Install with: pip install splunk-sdk")
 
 
@@ -78,7 +80,7 @@ class SplunkService:
         else:
             print(f"✅ Splunk service will connect to {self.host}:{self.port}")
     
-    def _connect(self) -> client.Service:
+    def _connect(self):
         """
         Create and return a Splunk service connection.
         
@@ -177,7 +179,7 @@ class SplunkService:
     
     def _execute_search_sync(
         self,
-        service: client.Service,
+        service: "client.Service" if client else None,
         search_kwargs: Dict[str, Any]
     ) -> Dict[str, Any]:
         """

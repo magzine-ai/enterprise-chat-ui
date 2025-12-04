@@ -1,5 +1,5 @@
 """Authentication endpoints."""
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from sqlmodel import Session, select
 from app.core.auth import verify_password, create_access_token
@@ -22,6 +22,7 @@ DEV_USERS = {
 
 
 def get_current_user(
+    request: Request,
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(http_bearer)] = None,
     token: Annotated[Optional[str], Depends(oauth2_scheme)] = None,
 ) -> str:
@@ -29,6 +30,10 @@ def get_current_user(
     Get current authenticated user from JWT token or SSO.
     Returns default user if authentication is disabled.
     """
+    # Handle OPTIONS requests immediately (CORS preflight) - return before dependency evaluation
+    if request.method == "OPTIONS":
+        return settings.default_user
+    
     # If authentication is disabled, return default user
     if not settings.auth_enabled:
         return settings.default_user

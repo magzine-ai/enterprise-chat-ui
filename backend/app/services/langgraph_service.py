@@ -95,6 +95,16 @@ async def classify_intent(state: ConversationState) -> ConversationState:
         if any(keyword in user_message for keyword in ["splunk", "logs", "data"]):
             needs_splunk_query = True
     
+    # Check for Java code question intent
+    java_code_keywords = [
+        "explain this method", "where is", "how does", "what does",
+        "find usages", "show callers", "show callees", "class hierarchy",
+        "java code", "method", "class", "interface", "package",
+        "where is used", "who calls", "what calls", "code question"
+    ]
+    if any(keyword in user_message for keyword in java_code_keywords):
+        intent = "java_code_question"
+    
     # Check for code request
     elif any(keyword in user_message for keyword in [
         "code", "example", "show code", "python", "javascript",
@@ -339,6 +349,92 @@ async def generate_llm_response(state: ConversationState) -> ConversationState:
     return state
 
 
+async def handle_java_code_question(state: ConversationState) -> ConversationState:
+    """
+    Handle Java code questions using code intelligence service.
+    
+    Detects Java code questions, retrieves relevant code chunks,
+    and generates answers with citations.
+    
+    Args:
+        state: Current conversation state with user_message
+    
+    Returns:
+        ConversationState: Updated state with answer and code blocks
+    """
+    from app.services.java_llm_service import java_llm_service
+    from app.core.database import get_session
+    from sqlmodel import Session
+    
+    user_message = state.get("user_message", "")
+    conversation_id = state.get("conversation_id", 0)
+    
+    # Check if Java indexer is enabled
+    if not settings.java_indexer_enabled:
+        state["response_text"] = "Java code intelligence is not enabled. Please enable it in configuration."
+        state["blocks"] = []
+        return state
+    
+    try:
+        # Get database session (simplified - in production, use proper dependency injection)
+        # For now, we'll create a session
+        from app.core.database import engine
+        with Session(engine) as session:
+            # Answer the code question
+            result = await java_llm_service.answer_code_question(
+                session=session,
+                query=user_message,
+                repository_id=None,  # Search across all repositories
+                conversation_history=state.get("messages", [])
+            )
+            
+            answer = result.get("answer", "")
+            evidence = result.get("evidence", [])
+            citations = result.get("citations", [])
+            
+            # Format response with code blocks
+            blocks = []
+            
+            # Add answer as markdown block
+            blocks.append({
+                "type": "markdown",
+                "data": {
+                    "content": answer
+                }
+            })
+            
+            # Add code blocks for evidence
+            for ev in evidence[:3]:  # Top 3 evidence chunks
+                file_path = ev.get("file_path", "")
+                fqn = ev.get("fqn", "")
+                code = ev.get("code", "")
+                start_line = ev.get("start_line", 0)
+                end_line = ev.get("end_line", 0)
+                
+                if code:
+                    blocks.append({
+                        "type": "code",
+                        "data": {
+                            "code": code,
+                            "language": "java",
+                            "title": f"{fqn} ({file_path}:{start_line}-{end_line})"
+                        }
+                    })
+            
+            state["response_text"] = answer
+            state["blocks"] = blocks
+            
+    except Exception as e:
+        print(f"❌ Error handling Java code question: {e}")
+        import traceback
+        print(traceback.format_exc())
+        state["error"] = str(e)
+        state["response_text"] = f"I encountered an error answering your code question: {str(e)}"
+        state["blocks"] = []
+    
+    return state
+
+
 async def generate_mock_response(state: ConversationState) -> ConversationState:
     """
     Generate mock response using existing pattern matching logic.
@@ -407,7 +503,7 @@ async def format_response_blocks(state: ConversationState) -> ConversationState:
     return state
 
 
-async def route_based_on_intent(state: ConversationState) -> Literal["splunk_query", "general_chat", "mock_response"]:
+async def route_based_on_intent(state: ConversationState) -> Literal["splunk_query", "java_code_question", "general_chat", "mock_response"]:
     """
     Route conversation flow based on classified intent and configuration.
     
@@ -441,6 +537,8 @@ async def route_based_on_intent(state: ConversationState) -> Literal["splunk_que
     # Route based on intent
     if intent == "splunk_query":
         return "splunk_query"
+    elif intent == "java_code_question":
+        return "java_code_question"
     else:
         return "general_chat"
 
@@ -497,6 +595,7 @@ def create_conversation_graph() -> StateGraph:
     graph.add_node("classify_intent", classify_intent)
     graph.add_node("generate_splunk_query", generate_splunk_query)
     graph.add_node("execute_splunk_query", execute_splunk_query)
+    graph.add_node("handle_java_code_question", handle_java_code_question)
     graph.add_node("generate_llm_response", generate_llm_response)
     graph.add_node("generate_mock_response", generate_mock_response)
     graph.add_node("format_response_blocks", format_response_blocks)
@@ -510,10 +609,14 @@ def create_conversation_graph() -> StateGraph:
         route_based_on_intent,
         {
             "splunk_query": "generate_splunk_query",
+            "java_code_question": "handle_java_code_question",
             "general_chat": "generate_llm_response",
             "mock_response": "generate_mock_response"
         }
     )
+    
+    # Add edge from Java code question handler
+    graph.add_edge("handle_java_code_question", "format_response_blocks")
     
     # Add edges from splunk query path
     graph.add_edge("generate_splunk_query", "execute_splunk_query")

@@ -173,6 +173,64 @@ class ApiService {
       }),
     });
   }
+
+  // Java Repository Management
+  async registerJavaRepository(name: string, localPath: string, description?: string): Promise<any> {
+    return this.request('/java/repositories', {
+      method: 'POST',
+      body: JSON.stringify({ name, local_path: localPath, description }),
+    });
+  }
+
+  async listJavaRepositories(): Promise<any[]> {
+    return this.request<any[]>('/java/repositories');
+  }
+
+  async getJavaRepository(repositoryId: number): Promise<any> {
+    return this.request(`/java/repositories/${repositoryId}`);
+  }
+
+  async triggerJavaIndexing(repositoryId: number, incremental: boolean = true): Promise<any> {
+    return this.request(`/java/repositories/${repositoryId}/index`, {
+      method: 'POST',
+      body: JSON.stringify({ incremental }),
+    });
+  }
+
+  async getJavaIndexingStatus(repositoryId: number): Promise<any> {
+    return this.request(`/java/repositories/${repositoryId}/status`);
+  }
+
+  async deleteJavaRepository(repositoryId: number): Promise<void> {
+    return this.request(`/java/repositories/${repositoryId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Java Code Search
+  async searchJavaCode(
+    query: string,
+    repositoryId?: number,
+    topK: number = 10,
+    chunkType?: string
+  ): Promise<{ results: any[]; total: number }> {
+    return this.request('/java/search', {
+      method: 'POST',
+      body: JSON.stringify({ query, repository_id: repositoryId, top_k: topK, chunk_type: chunkType }),
+    });
+  }
+
+  // Java Code Q&A
+  async askJavaCodeQuestion(query: string, repositoryId?: number): Promise<{
+    answer: string;
+    evidence: any[];
+    citations: any[];
+  }> {
+    return this.request('/java/ask', {
+      method: 'POST',
+      body: JSON.stringify({ query, repository_id: repositoryId }),
+    });
+  }
 }
 
 export const apiService = new ApiService();
