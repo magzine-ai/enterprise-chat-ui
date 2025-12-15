@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     java_opensearch_index: str = "java_code_chunks"  # OpenSearch index for Java chunks
     java_opensearch_enabled: bool = False  # Enable OpenSearch integration for Java code intelligence
     
+    # GitHub Integration
+    github_token: Optional[str] = None  # GitHub Personal Access Token for private repos
+    github_username: Optional[str] = None  # GitHub username (optional, for HTTPS auth)
+    
     class Config:
         env_file = ".env"
         case_sensitive = False

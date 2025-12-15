@@ -175,10 +175,22 @@ class ApiService {
   }
 
   // Java Repository Management
-  async registerJavaRepository(name: string, localPath: string, description?: string): Promise<any> {
+  async registerJavaRepository(
+    name: string,
+    localPath?: string,
+    githubUrl?: string,
+    githubBranch?: string,
+    description?: string
+  ): Promise<any> {
     return this.request('/java/repositories', {
       method: 'POST',
-      body: JSON.stringify({ name, local_path: localPath, description }),
+      body: JSON.stringify({
+        name,
+        local_path: localPath,
+        github_url: githubUrl,
+        github_branch: githubBranch,
+        description,
+      }),
     });
   }
 
@@ -204,6 +216,40 @@ class ApiService {
   async deleteJavaRepository(repositoryId: number): Promise<void> {
     return this.request(`/java/repositories/${repositoryId}`, {
       method: 'DELETE',
+    });
+  }
+
+  async getRepositoryMetadata(repositoryId: number): Promise<any> {
+    return this.request(`/java/repositories/${repositoryId}/metadata`);
+  }
+
+  async visualizeGraph(
+    query: string,
+    repositoryId?: number,
+    maxNodes: number = 50,
+    maxDepth: number = 2
+  ): Promise<{ nodes: any[]; edges: any[] }> {
+    return this.request('/java/graph/visualize', {
+      method: 'POST',
+      body: JSON.stringify({
+        query,
+        repository_id: repositoryId,
+        max_nodes: maxNodes,
+        max_depth: maxDepth,
+      }),
+    });
+  }
+
+  async updateThinkingMode(conversationId: number, thinkingMode: string): Promise<any> {
+    return this.request(`/conversations/${conversationId}/thinking-mode`, {
+      method: 'PATCH',
+      body: JSON.stringify({ thinking_mode: thinkingMode }),
+    });
+  }
+
+  async buildRepositoryGraph(repositoryId: number, rebuild: boolean = false): Promise<any> {
+    return this.request(`/java/repositories/${repositoryId}/build-graph?rebuild=${rebuild}`, {
+      method: 'POST',
     });
   }
 

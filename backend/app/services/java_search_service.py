@@ -14,6 +14,7 @@ from app.models.java_repository import JavaRepository
 from app.models.code_search_result import CodeSearchResult
 from app.services.opensearch_service import opensearch_service
 from app.services.java_indexer_service import java_indexer_service
+from app.services.advanced_rag_service import advanced_rag_service
 from openai import AsyncOpenAI
 import re
 import subprocess
@@ -39,10 +40,12 @@ class JavaSearchService:
         query: str,
         repository_id: Optional[int] = None,
         top_k: int = 10,
-        chunk_type: Optional[str] = None
+        chunk_type: Optional[str] = None,
+        use_exhaustive: bool = False,
+        use_case: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Main search entry point - performs hybrid search.
+        Main search entry point - performs hybrid search with optional exhaustive RAG.
         
         Args:
             session: Database session
@@ -50,10 +53,19 @@ class JavaSearchService:
             repository_id: Optional repository ID to filter by
             top_k: Number of results to return
             chunk_type: Optional chunk type filter (method, class, file, module)
+            use_exhaustive: Whether to use exhaustive multi-hop search
+            use_case: Use case type (migration, impact_analysis, etc.)
         
         Returns:
             List of search results with scores and metadata
         """
+        # Check if exhaustive search is needed
+        if use_exhaustive:
+            return await self._exhaustive_search(
+                session, query, repository_id, top_k, use_case
+            )
+        
+        # Standard hybrid search
         # Semantic search
         semantic_results = await self._semantic_search(query, repository_id, top_k * 2)
         
@@ -69,6 +81,67 @@ class JavaSearchService:
         reranked = await self._rerank_results(session, merged_results, query, top_k)
         
         return reranked
+    
+    async def _exhaustive_search(
+        self,
+        session: Session,
+        query: str,
+        repository_id: Optional[int],
+        top_k: int,
+        use_case: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform exhaustive multi-hop search using advanced RAG.
+        
+        Args:
+            session: Database session
+            query: Search query
+            repository_id: Optional repository filter
+            top_k: Number of results
+            use_case: Use case type
+        
+        Returns:
+            List of search results
+        """
+        # Use advanced RAG service for exhaustive search
+        rag_result = await advanced_rag_service.retrieve_with_multihop_exhaustive(
+            session=session,
+            query=query,
+            repository_id=repository_id,
+            max_hops=5,
+            ensure_completeness=True,
+            use_case=use_case
+        )
+        
+        # Convert evidence to search results format
+        results = []
+        evidence = rag_result.get("evidence", [])
+        
+        for ev in evidence[:top_k]:
+            chunk_id = ev.get("chunk_id")
+            if chunk_id:
+                chunk = session.get(JavaChunk, chunk_id)
+                if chunk:
+                    results.append({
+                        'chunk_id': chunk.id,
+                        'repository_id': chunk.repository_id,
+                        'type': chunk.type,
+                        'fqn': chunk.fqn,
+                        'file_path': chunk.file_path,
+                        'code': chunk.code,
+                        'summary': chunk.summary,
+                        'start_line': ev.get('start_line', chunk.start_line),
+                        'end_line': ev.get('end_line', chunk.end_line),
+                        'semantic_score': ev.get('score', 0.0),
+                        'lexical_score': 0.0,
+                        'graph_proximity': 1.0 if ev.get('hop') == 'reverse' else 0.5,
+                        'confidence': ev.get('score', 0.0),
+                        'final_score': ev.get('score', 0.0),
+                        'hop': ev.get('hop', 0),
+                        'relationship': ev.get('relationship'),
+                    })
+        
+        return results
     
     async def _semantic_search(
         self,

@@ -17,6 +17,7 @@ class Conversation(ConversationBase, table=True):
     __tablename__ = "conversations"
     
     id: Optional[int] = Field(default=None, primary_key=True)
+    thinking_mode: str = Field(default="thinking")  # "thinking" or "deep_thinking"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     
@@ -32,6 +33,7 @@ class ConversationCreate(ConversationBase):
 class ConversationRead(ConversationBase):
     """Conversation read schema."""
     id: int
+    thinking_mode: str = "thinking"
     created_at: datetime
     updated_at: datetime
 

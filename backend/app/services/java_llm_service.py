@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.services.llm_service import llm_service
 from app.services.java_search_service import java_search_service
+from app.services.advanced_rag_service import advanced_rag_service
 from app.models.java_chunk import JavaChunk
 from app.models.java_repository import JavaRepository
 from openai import AsyncOpenAI
@@ -34,20 +35,33 @@ class JavaLLMService:
         session: Session,
         query: str,
         repository_id: Optional[int] = None,
-        conversation_history: Optional[List[Dict[str, Any]]] = None
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        use_exhaustive: bool = False,
+        use_case: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Answer a code question using LLM with retrieved context.
+        Supports both standard and exhaustive multi-hop search.
         
         Args:
             session: Database session
             query: User's question about the code
             repository_id: Optional repository ID to search within
             conversation_history: Optional conversation history
+            use_exhaustive: Whether to use exhaustive multi-hop search
+            use_case: Use case type (migration, impact_analysis, etc.)
         
         Returns:
             Dict with answer, evidence chunks, and citations
         """
+        # Determine if exhaustive search is needed
+        if use_exhaustive or use_case:
+            # Use advanced RAG for exhaustive search
+            return await self._answer_with_exhaustive_rag(
+                session, query, repository_id, conversation_history, use_case
+            )
+        
+        # Standard search
         # Search for relevant chunks
         search_results = await java_search_service.search_code(
             session=session,
@@ -67,7 +81,7 @@ class JavaLLMService:
         context = self._format_context_for_llm(search_results)
         
         # Build prompt
-        system_prompt = """You are a Java code intelligence assistant. Answer questions about Java codebases with precision and evidence.
+        system_prompt = """You are a multi-language code intelligence assistant. Answer questions about codebases with precision and evidence.
 
 When answering:
 1. Use the provided code context to answer the question
@@ -119,6 +133,122 @@ Provide a detailed answer with specific file and line number citations."""
                 'answer': f"I encountered an error while answering your question: {str(e)}",
                 'evidence': search_results[:3],
                 'citations': []
+            }
+    
+    async def _answer_with_exhaustive_rag(
+        self,
+        session: Session,
+        query: str,
+        repository_id: Optional[int],
+        conversation_history: Optional[List[Dict[str, Any]]],
+        use_case: Optional[str]
+    ) -> Dict[str, Any]:
+        """
+        Answer using exhaustive multi-hop RAG.
+        
+        Args:
+            session: Database session
+            query: User's question
+            repository_id: Optional repository filter
+            conversation_history: Optional conversation history
+            use_case: Use case type
+        
+        Returns:
+            Dict with answer, evidence, and citations
+        """
+        # Use advanced RAG for exhaustive retrieval
+        rag_result = await advanced_rag_service.retrieve_with_multihop_exhaustive(
+            session=session,
+            query=query,
+            repository_id=repository_id,
+            max_hops=5,
+            ensure_completeness=True,
+            use_case=use_case
+        )
+        
+        evidence = rag_result.get("evidence", [])
+        completeness = rag_result.get("completeness_check", {})
+        
+        if not evidence:
+            return {
+                'answer': "I couldn't find any relevant code for your question.",
+                'evidence': [],
+                'citations': [],
+                'completeness_check': completeness
+            }
+        
+        # Format context using advanced RAG formatter
+        context = advanced_rag_service.format_context_for_llm({
+            'evidence': evidence,
+            'completeness_check': completeness
+        })
+        
+        # Build enhanced prompt with completeness info
+        system_prompt = """You are a multi-language code intelligence assistant specialized in enterprise code analysis.
+
+You have access to exhaustive, multi-hop code search results that ensure comprehensive coverage.
+
+When answering:
+1. Use ALL provided code context to answer comprehensively
+2. Reference specific file paths and line numbers when citing code
+3. Explain code behavior, relationships, and patterns clearly
+4. If the question requires completeness (migration, impact analysis), ensure you mention ALL relevant components
+5. Note the completeness percentage and any potential gaps if mentioned
+6. Be thorough and comprehensive
+
+Format citations as: file_path:start_line-end_line"""
+
+        user_prompt = f"""Context from exhaustive codebase search:
+
+{context}
+
+Question: {query}
+
+Provide a comprehensive answer with specific file and line number citations. If this is a migration or impact analysis question, ensure you cover ALL relevant components."""
+
+        # Generate answer using LLM
+        try:
+            if not self.client:
+                answer = self._generate_fallback_answer(query, evidence[:5])
+            else:
+                response = await self.client.chat.completions.create(
+                    model=settings.openai_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=2000  # More tokens for comprehensive answers
+                )
+                answer = response.choices[0].message.content or ""
+            
+            # Extract citations
+            citations = []
+            for ev in evidence[:10]:
+                if ev.get('file_path'):
+                    citations.append({
+                        'file_path': ev.get('file_path'),
+                        'start_line': ev.get('start_line', 0),
+                        'end_line': ev.get('end_line', 0),
+                        'fqn': ev.get('fqn', ''),
+                    })
+            
+            return {
+                'answer': answer,
+                'evidence': evidence[:10],  # Top 10 evidence chunks
+                'citations': citations,
+                'completeness_check': completeness,
+                'total_evidence_pieces': len(evidence),
+                'use_case': use_case or 'general'
+            }
+            
+        except Exception as e:
+            print(f"❌ Error generating exhaustive code answer: {e}")
+            return {
+                'answer': f"I encountered an error while answering your question: {str(e)}",
+                'evidence': evidence[:5],
+                'citations': [],
+                'completeness_check': completeness
             }
     
     def _format_context_for_llm(self, search_results: List[Dict[str, Any]]) -> str:

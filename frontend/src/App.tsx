@@ -17,6 +17,7 @@ import {
   setConversations,
   addConversation,
   setCurrentConversation,
+  updateConversationThinkingMode,
 } from './store/slices/conversationsSlice';
 import { 
   setMessages, 
@@ -35,12 +36,18 @@ import { wsService } from './services/wsService';
 import ConversationSidebar from './components/ConversationSidebar';
 import MessageList from './components/MessageList';
 import MessageInput from './components/MessageInput';
+import ThinkingModeToggle from './components/ThinkingModeToggle';
 import './App.css';
 
 const AppContent: React.FC = () => {
   const dispatch = useAppDispatch();
   const currentConversationId = useAppSelector(
     (state) => state.conversations.currentConversationId
+  );
+  const currentConversation = useAppSelector(
+    (state) => state.conversations.conversations.find(
+      conv => conv.id === currentConversationId
+    )
   );
 
 
@@ -420,6 +427,19 @@ const AppContent: React.FC = () => {
         </header>
         <main className="app-main">
           <MessageList />
+          <ThinkingModeToggle
+            conversationId={currentConversationId}
+            currentMode={currentConversation?.thinking_mode}
+            onModeChange={(mode) => {
+              // Update the conversation in the store
+              if (currentConversationId) {
+                dispatch(updateConversationThinkingMode({
+                  id: currentConversationId,
+                  thinking_mode: mode,
+                }));
+              }
+            }}
+          />
           <MessageInput />
         </main>
       </div>

@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional, Set
 from pathlib import Path
 import os
 import hashlib
+import re
+import json
 from datetime import datetime
 from sqlmodel import Session, select
 from app.core.config import settings
@@ -17,6 +19,13 @@ from app.models.java_chunk import JavaChunk
 from app.services.java_indexer_service import java_indexer_service
 from app.services.opensearch_service import opensearch_service
 import asyncio
+
+try:
+    from git import Repo
+    GIT_AVAILABLE = True
+except ImportError:
+    GIT_AVAILABLE = False
+    print("⚠️ GitPython not available. GitHub repository cloning will be disabled.")
 
 
 class RepositoryManager:
@@ -32,67 +41,166 @@ class RepositoryManager:
         self.repositories_path = Path(settings.java_repositories_path)
         self.repositories_path.mkdir(parents=True, exist_ok=True)
     
+    def _is_github_url(self, url: str) -> bool:
+        """Check if the URL is a GitHub repository URL."""
+        github_patterns = [
+            r'^https?://github\.com/[\w\-\.]+/[\w\-\.]+(?:\.git)?$',
+            r'^git@github\.com:[\w\-\.]+/[\w\-\.]+(?:\.git)?$',
+        ]
+        return any(re.match(pattern, url) for pattern in github_patterns)
+    
+    def _get_repository_path(self, name: str, github_url: Optional[str] = None) -> Path:
+        """Get local path for a repository (cloned or local)."""
+        if github_url:
+            # Use sanitized repository name for directory
+            safe_name = re.sub(r'[^\w\-_]', '_', name)
+            return self.repositories_path / safe_name
+        return self.repositories_path / name
+    
     def register_repository(
         self,
         session: Session,
         name: str,
-        local_path: str,
+        local_path: Optional[str] = None,
+        github_url: Optional[str] = None,
+        github_branch: Optional[str] = "main",
         description: Optional[str] = None
     ) -> JavaRepository:
         """
-        Register a new Java repository.
+        Register a new repository (local or GitHub).
         
         Args:
             session: Database session
             name: Repository name
-            local_path: Local file system path to repository
+            local_path: Local file system path to repository (for local repos)
+            github_url: GitHub repository URL (for GitHub repos)
+            github_branch: Branch to clone (default: main)
             description: Optional description
         
         Returns:
             JavaRepository: Created repository object
         
         Raises:
-            ValueError: If path doesn't exist or is invalid
+            ValueError: If path doesn't exist or is invalid, or if GitHub URL is invalid
         """
-        path = Path(local_path)
-        if not path.exists() or not path.is_dir():
-            raise ValueError(f"Repository path does not exist or is not a directory: {local_path}")
+        # Validate that either local_path or github_url is provided
+        if not local_path and not github_url:
+            raise ValueError("Either local_path or github_url must be provided")
         
-        # Check if repository already exists
-        existing = session.exec(
-            select(JavaRepository).where(JavaRepository.local_path == str(path.absolute()))
-        ).first()
+        if local_path and github_url:
+            raise ValueError("Cannot specify both local_path and github_url")
         
-        if existing:
-            return existing
-        
-        repository = JavaRepository(
-            name=name,
-            local_path=str(path.absolute()),
-            description=description,
-            status=RepositoryIndexStatus.PENDING
-        )
+        # Handle GitHub repository
+        if github_url:
+            if not GIT_AVAILABLE:
+                raise ValueError("GitPython is not installed. Cannot clone GitHub repositories.")
+            
+            if not self._is_github_url(github_url):
+                raise ValueError(f"Invalid GitHub URL format: {github_url}")
+            
+            # Check if repository already exists by URL
+            existing = session.exec(
+                select(JavaRepository).where(JavaRepository.github_url == github_url)
+            ).first()
+            
+            if existing:
+                return existing
+            
+            # Clone repository
+            repo_path = self._get_repository_path(name, github_url)
+            if not repo_path.exists():
+                print(f"📥 Cloning repository {github_url} to {repo_path}")
+                try:
+                    # Handle authentication for private repositories
+                    clone_url = github_url
+                    if settings.github_token and github_url.startswith("https://"):
+                        # Inject token into HTTPS URL for authentication
+                        from urllib.parse import urlparse
+                        parsed = urlparse(github_url)
+                        clone_url = f"{parsed.scheme}://{settings.github_token}@{parsed.netloc}{parsed.path}"
+                    
+                    Repo.clone_from(clone_url, str(repo_path), branch=github_branch)
+                    print(f"✅ Successfully cloned repository to {repo_path}")
+                except Exception as e:
+                    error_msg = str(e)
+                    if "Authentication failed" in error_msg or "Permission denied" in error_msg:
+                        raise ValueError(
+                            f"Authentication failed. For private repositories, you need to:\n"
+                            f"1. Use SSH URL with SSH keys configured, OR\n"
+                            f"2. Set GITHUB_TOKEN environment variable for HTTPS URLs"
+                        )
+                    raise ValueError(f"Failed to clone repository: {error_msg}")
+            else:
+                # Update existing clone
+                print(f"🔄 Updating existing clone at {repo_path}")
+                try:
+                    repo = Repo(str(repo_path))
+                    repo.remotes.origin.pull()
+                    print(f"✅ Successfully updated repository")
+                except Exception as e:
+                    print(f"⚠️ Warning: Could not update repository: {e}")
+            
+            repository = JavaRepository(
+                name=name,
+                local_path=str(repo_path.absolute()),
+                github_url=github_url,
+                github_branch=github_branch,
+                description=description,
+                status=RepositoryIndexStatus.PENDING
+            )
+        else:
+            # Handle local repository
+            path = Path(local_path)
+            if not path.exists() or not path.is_dir():
+                raise ValueError(f"Repository path does not exist or is not a directory: {local_path}")
+            
+            # Check if repository already exists
+            existing = session.exec(
+                select(JavaRepository).where(JavaRepository.local_path == str(path.absolute()))
+            ).first()
+            
+            if existing:
+                return existing
+            
+            repository = JavaRepository(
+                name=name,
+                local_path=str(path.absolute()),
+                description=description,
+                status=RepositoryIndexStatus.PENDING
+            )
         
         session.add(repository)
         session.commit()
         session.refresh(repository)
         
-        print(f"✅ Registered repository: {name} at {local_path}")
+        print(f"✅ Registered repository: {name}")
         return repository
     
-    def scan_repository(self, repository: JavaRepository) -> List[str]:
+    def scan_repository(
+        self, 
+        repository: JavaRepository, 
+        language: Optional[str] = None
+    ) -> List[str]:
         """
-        Scan repository and discover all Java files.
+        Scan repository and discover all code files.
+        Supports multiple languages: Java, Python, JavaScript/TypeScript, Go, Rust.
         
         Args:
             repository: JavaRepository object
+            language: Optional language filter (None = all languages)
         
         Returns:
-            List[str]: List of Java file paths
+            List[str]: List of code file paths
         """
-        java_files = java_indexer_service.find_java_files(repository.local_path)
-        print(f"📁 Found {len(java_files)} Java files in {repository.name}")
-        return java_files
+        if language:
+            code_files = java_indexer_service.find_code_files(repository.local_path, language)
+            print(f"📁 Found {len(code_files)} {language} files in {repository.name}")
+        else:
+            # Scan all supported languages
+            code_files = java_indexer_service.find_code_files(repository.local_path)
+            print(f"📁 Found {len(code_files)} code files (all languages) in {repository.name}")
+        
+        return code_files
     
     def get_changed_files(
         self,
@@ -124,12 +232,12 @@ class RepositoryManager:
             if chunk.file_path not in existing_files:
                 existing_files[chunk.file_path] = chunk.last_modified
         
-        # Scan for all Java files
-        all_java_files = self.scan_repository(repository)
+        # Scan for all code files (multi-language)
+        all_code_files = self.scan_repository(repository)
         
         # Find changed files
         changed_files = []
-        for file_path in all_java_files:
+        for file_path in all_code_files:
             file_stat = os.stat(file_path)
             file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
             
@@ -227,8 +335,11 @@ class RepositoryManager:
             
             for i, file_path in enumerate(files_to_index):
                 try:
-                    # Parse file
-                    parsed_data = java_indexer_service.parse_java_file(file_path)
+                    # Detect language
+                    language = java_indexer_service.detect_language(file_path)
+                    
+                    # Parse file (supports multiple languages)
+                    parsed_data = java_indexer_service.parse_file(file_path, language)
                     if not parsed_data:
                         continue
                     
@@ -236,11 +347,12 @@ class RepositoryManager:
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                         file_content = f.read()
                     
-                    # Generate chunks
+                    # Generate chunks (multi-language support)
                     chunks = java_indexer_service.generate_chunks(
                         parsed_data,
                         file_content,
-                        repository.id
+                        repository.id,
+                        language=language
                     )
                     
                     all_chunks.extend(chunks)
@@ -293,9 +405,33 @@ class RepositoryManager:
             
             stats['total_chunks'] = stats['indexed_chunks']
             
-            # Update repository status
+            # Update repository metadata
             repository.status = RepositoryIndexStatus.COMPLETED
             repository.last_indexed_at = datetime.utcnow()
+            repository.file_count = stats['indexed_files']
+            
+            # Detect languages from indexed chunks
+            languages = set()
+            chunks_query = session.exec(
+                select(JavaChunk).where(JavaChunk.repository_id == repository.id)
+            ).all()
+            for chunk in chunks_query:
+                # Try to detect language from file extension
+                file_ext = Path(chunk.file_path).suffix.lower()
+                lang_map = {
+                    '.java': 'java',
+                    '.py': 'python',
+                    '.js': 'javascript',
+                    '.ts': 'typescript',
+                    '.go': 'go',
+                    '.rs': 'rust',
+                }
+                if file_ext in lang_map:
+                    languages.add(lang_map[file_ext])
+            
+            if languages:
+                repository.languages = json.dumps(list(languages))
+            
             session.add(repository)
             session.commit()
             

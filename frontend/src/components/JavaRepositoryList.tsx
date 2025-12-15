@@ -6,6 +6,7 @@
  */
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiService } from '@/services/api';
+import RepositoryViewer from './RepositoryViewer';
 import './JavaRepositoryList.css';
 
 interface JavaRepository {
@@ -46,6 +47,7 @@ const JavaRepositoryList: React.FC<JavaRepositoryListProps> = ({
   const [refreshing, setRefreshing] = useState<Record<number, boolean>>({});
   const [internalSearchQuery, setInternalSearchQuery] = useState('');
   const [internalStatusFilter, setInternalStatusFilter] = useState('all');
+  const [viewingRepositoryId, setViewingRepositoryId] = useState<number | null>(null);
 
   // Use external props if provided, otherwise use internal state
   const searchQuery = externalSearchQuery !== undefined ? externalSearchQuery : internalSearchQuery;
@@ -381,6 +383,17 @@ const JavaRepositoryList: React.FC<JavaRepositoryListProps> = ({
 
               <div className="repository-actions">
                 <button
+                  className="btn-primary btn-sm"
+                  onClick={() => setViewingRepositoryId(repo.id)}
+                  title="View repository details and graph visualization"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: '4px', verticalAlign: 'middle' }}>
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                  View Details
+                </button>
+                <button
                   className="btn-secondary btn-sm"
                   onClick={() => handleReindex(repo.id)}
                   disabled={isRefreshing || status?.status === 'indexing'}
@@ -399,6 +412,19 @@ const JavaRepositoryList: React.FC<JavaRepositoryListProps> = ({
           );
         })}
       </div>
+
+      {/* Repository Viewer Modal */}
+      {viewingRepositoryId && (
+        <div className="repository-viewer-modal">
+          <div className="repository-viewer-modal-overlay" onClick={() => setViewingRepositoryId(null)}></div>
+          <div className="repository-viewer-modal-content">
+            <RepositoryViewer
+              repositoryId={viewingRepositoryId}
+              onClose={() => setViewingRepositoryId(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

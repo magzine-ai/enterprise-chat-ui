@@ -62,6 +62,7 @@ export interface Job {
 export interface Conversation {
   id: number;
   title?: string;
+  thinking_mode?: string;
   created_at: string;
   updated_at: string;
 }

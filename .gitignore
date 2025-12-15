@@ -58,3 +58,5 @@ temp/
 *.tmp
 
 
+backend/repositories/*/
+backend/repositories/*/.git

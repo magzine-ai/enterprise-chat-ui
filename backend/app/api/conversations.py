@@ -1,5 +1,6 @@
 """Conversation and message endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from pydantic import BaseModel
 from sqlmodel import Session, select
 from typing import Annotated, List, Dict, Any, Tuple
 from app.core.database import get_session
@@ -34,10 +35,46 @@ async def create_conversation(
 ):
     """Create a new conversation."""
     db_conversation = Conversation(**conversation.model_dump())
+    # Default thinking mode is "thinking"
+    if not hasattr(db_conversation, 'thinking_mode') or not db_conversation.thinking_mode:
+        db_conversation.thinking_mode = "thinking"
     session.add(db_conversation)
     session.commit()
     session.refresh(db_conversation)
     return db_conversation
+
+
+class ThinkingModeUpdate(BaseModel):
+    thinking_mode: str
+
+
+@router.patch("/{conversation_id}/thinking-mode", response_model=ConversationRead)
+async def update_thinking_mode(
+    conversation_id: int,
+    request: ThinkingModeUpdate,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[str, Depends(get_current_user)],
+):
+    """Update thinking mode for a conversation."""
+    thinking_mode = request.thinking_mode
+    if thinking_mode not in ["thinking", "deep_thinking"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="thinking_mode must be 'thinking' or 'deep_thinking'"
+        )
+    
+    conversation = session.get(Conversation, conversation_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found"
+        )
+    
+    conversation.thinking_mode = thinking_mode
+    session.add(conversation)
+    session.commit()
+    session.refresh(conversation)
+    return conversation
 
 
 @router.post("/{conversation_id}/messages")

@@ -28,4 +28,18 @@ splunk-sdk>=1.7.0
 javalang>=0.13.0
 networkx>=3.0
 
+# Multi-Language Code Parsing (TreeSitter)
+tree-sitter>=0.20.4
+tree-sitter-python>=0.20.4
+tree-sitter-javascript>=0.20.1
+tree-sitter-java>=0.20.2
+tree-sitter-go>=0.19.1
+tree-sitter-rust>=0.20.3
+
+# Optional: TigerGraph for large-scale graph operations
+# pyTigerGraph>=1.2.0  # Uncomment if using TigerGraph
+
+# Git support for GitHub repository cloning
+GitPython>=3.1.40
+
 

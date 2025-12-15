@@ -19,8 +19,12 @@ class RepositoryIndexStatus(str, Enum):
 class JavaRepositoryBase(SQLModel):
     """Base Java repository schema."""
     name: str
-    local_path: str
+    local_path: Optional[str] = None  # For local repositories
+    github_url: Optional[str] = None  # For GitHub repositories
+    github_branch: Optional[str] = "main"  # Branch to clone
     description: Optional[str] = None
+    file_count: Optional[int] = None  # Total number of files indexed
+    languages: Optional[str] = None  # JSON array of detected languages
 
 
 class JavaRepository(JavaRepositoryBase, table=True):
@@ -32,6 +36,8 @@ class JavaRepository(JavaRepositoryBase, table=True):
     last_indexed_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    file_count: Optional[int] = None  # Total number of files indexed
+    languages: Optional[str] = None  # JSON array of detected languages
     
     # Relationships
     chunks: list["JavaChunk"] = Relationship(back_populates="repository")
@@ -49,4 +55,6 @@ class JavaRepositoryRead(JavaRepositoryBase):
     last_indexed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    file_count: Optional[int] = None
+    languages: Optional[str] = None
 

@@ -24,6 +24,7 @@ const conversationsSlice = createSlice({
       const newConversations = action.payload.map(conv => ({
         id: conv.id,
         title: conv.title,
+        thinking_mode: conv.thinking_mode || 'thinking',
         created_at: conv.created_at,
         updated_at: conv.updated_at,
       }));
@@ -39,6 +40,7 @@ const conversationsSlice = createSlice({
       const newConversation: Conversation = {
         id: action.payload.id,
         title: action.payload.title,
+        thinking_mode: action.payload.thinking_mode || 'thinking',
         created_at: action.payload.created_at,
         updated_at: action.payload.updated_at,
       };
@@ -48,6 +50,7 @@ const conversationsSlice = createSlice({
         ...state.conversations.map(conv => ({
           id: conv.id,
           title: conv.title,
+          thinking_mode: conv.thinking_mode || 'thinking',
           created_at: conv.created_at,
           updated_at: conv.updated_at,
         }))
@@ -83,6 +86,7 @@ const conversationsSlice = createSlice({
             return {
               id: conv.id,
               title: action.payload.title !== undefined ? action.payload.title : conv.title,
+              thinking_mode: conv.thinking_mode || 'thinking',
               created_at: conv.created_at,
               updated_at: new Date().toISOString(),
             };
@@ -90,9 +94,24 @@ const conversationsSlice = createSlice({
           return {
             id: conv.id,
             title: conv.title,
+            thinking_mode: conv.thinking_mode || 'thinking',
             created_at: conv.created_at,
             updated_at: conv.updated_at,
           };
+        });
+      }
+    },
+    updateConversationThinkingMode: (state, action: PayloadAction<{ id: number; thinking_mode: string }>) => {
+      const index = state.conversations.findIndex(conv => conv.id === action.payload.id);
+      if (index !== -1) {
+        state.conversations = state.conversations.map((conv, i) => {
+          if (i === index) {
+            return {
+              ...conv,
+              thinking_mode: action.payload.thinking_mode,
+            };
+          }
+          return conv;
         });
       }
     },
@@ -103,6 +122,7 @@ const conversationsSlice = createSlice({
         .map(conv => ({
           id: conv.id,
           title: conv.title,
+          thinking_mode: conv.thinking_mode || 'thinking',
           created_at: conv.created_at,
           updated_at: conv.updated_at,
         }));
@@ -125,6 +145,7 @@ export const {
   addConversation,
   setCurrentConversation,
   updateConversation,
+  updateConversationThinkingMode,
   deleteConversation,
   setLoading,
 } = conversationsSlice.actions;

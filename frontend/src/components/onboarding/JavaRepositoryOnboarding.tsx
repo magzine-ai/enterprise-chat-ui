@@ -41,7 +41,10 @@ interface JavaRepositoryOnboardingProps {
 const JavaRepositoryOnboarding: React.FC<JavaRepositoryOnboardingProps> = ({ onBack, onRepositoryIndexed }) => {
   const [currentStep, setCurrentStep] = useState(0);
   const [repositoryName, setRepositoryName] = useState('');
+  const [repositoryType, setRepositoryType] = useState<'local' | 'github'>('local');
   const [repositoryPath, setRepositoryPath] = useState('');
+  const [githubUrl, setGithubUrl] = useState('');
+  const [githubBranch, setGithubBranch] = useState('main');
   const [description, setDescription] = useState('');
   const [incremental, setIncremental] = useState(true);
   const [isRegistering, setIsRegistering] = useState(false);
@@ -68,8 +71,18 @@ const JavaRepositoryOnboarding: React.FC<JavaRepositoryOnboardingProps> = ({ onB
   }, [statusCheckInterval]);
 
   const handleRegister = async () => {
-    if (!repositoryName.trim() || !repositoryPath.trim()) {
-      setError('Repository name and path are required');
+    if (!repositoryName.trim()) {
+      setError('Repository name is required');
+      return;
+    }
+
+    if (repositoryType === 'local' && !repositoryPath.trim()) {
+      setError('Local repository path is required');
+      return;
+    }
+
+    if (repositoryType === 'github' && !githubUrl.trim()) {
+      setError('GitHub URL is required');
       return;
     }
 
@@ -79,13 +92,17 @@ const JavaRepositoryOnboarding: React.FC<JavaRepositoryOnboardingProps> = ({ onB
     try {
       console.log('📞 Calling registerJavaRepository API', {
         name: repositoryName.trim(),
-        local_path: repositoryPath.trim(),
+        local_path: repositoryType === 'local' ? repositoryPath.trim() : undefined,
+        github_url: repositoryType === 'github' ? githubUrl.trim() : undefined,
+        github_branch: repositoryType === 'github' ? githubBranch.trim() : undefined,
         description: description.trim() || undefined
       });
       
       const repo = await apiService.registerJavaRepository(
         repositoryName.trim(),
-        repositoryPath.trim(),
+        repositoryType === 'local' ? repositoryPath.trim() : undefined,
+        repositoryType === 'github' ? githubUrl.trim() : undefined,
+        repositoryType === 'github' ? githubBranch.trim() : undefined,
         description.trim() || undefined
       );
       
@@ -224,19 +241,76 @@ const JavaRepositoryOnboarding: React.FC<JavaRepositoryOnboardingProps> = ({ onB
             </div>
 
             <div className="form-group">
-              <label htmlFor="repo-path">Local Repository Path *</label>
-              <input
-                id="repo-path"
-                type="text"
-                value={repositoryPath}
-                onChange={(e) => setRepositoryPath(e.target.value)}
-                placeholder="/path/to/java/repository"
-                className="form-input"
-              />
-              <small className="form-hint">
-                Enter the absolute path to your Java repository on the server
-              </small>
+              <label>Repository Type *</label>
+              <div className="radio-group">
+                <label className="radio-label">
+                  <input
+                    type="radio"
+                    value="local"
+                    checked={repositoryType === 'local'}
+                    onChange={(e) => setRepositoryType(e.target.value as 'local' | 'github')}
+                  />
+                  <span>Local Path</span>
+                </label>
+                <label className="radio-label">
+                  <input
+                    type="radio"
+                    value="github"
+                    checked={repositoryType === 'github'}
+                    onChange={(e) => setRepositoryType(e.target.value as 'local' | 'github')}
+                  />
+                  <span>GitHub Repository</span>
+                </label>
+              </div>
             </div>
+
+            {repositoryType === 'local' ? (
+              <div className="form-group">
+                <label htmlFor="repo-path">Local Repository Path *</label>
+                <input
+                  id="repo-path"
+                  type="text"
+                  value={repositoryPath}
+                  onChange={(e) => setRepositoryPath(e.target.value)}
+                  placeholder="/path/to/java/repository"
+                  className="form-input"
+                />
+                <small className="form-hint">
+                  Enter the absolute path to your repository on the server
+                </small>
+              </div>
+            ) : (
+              <>
+                <div className="form-group">
+                  <label htmlFor="github-url">GitHub Repository URL *</label>
+                  <input
+                    id="github-url"
+                    type="text"
+                    value={githubUrl}
+                    onChange={(e) => setGithubUrl(e.target.value)}
+                    placeholder="https://github.com/username/repository"
+                    className="form-input"
+                  />
+                  <small className="form-hint">
+                    Enter the GitHub repository URL (HTTPS or SSH)
+                  </small>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="github-branch">Branch</label>
+                  <input
+                    id="github-branch"
+                    type="text"
+                    value={githubBranch}
+                    onChange={(e) => setGithubBranch(e.target.value)}
+                    placeholder="main"
+                    className="form-input"
+                  />
+                  <small className="form-hint">
+                    Branch to clone (default: main)
+                  </small>
+                </div>
+              </>
+            )}
 
             <div className="form-group">
               <label htmlFor="repo-description">Description (Optional)</label>
@@ -261,7 +335,12 @@ const JavaRepositoryOnboarding: React.FC<JavaRepositoryOnboardingProps> = ({ onB
               <button
                 className="btn-primary"
                 onClick={handleRegister}
-                disabled={isRegistering || !repositoryName.trim() || !repositoryPath.trim()}
+                disabled={
+                  isRegistering || 
+                  !repositoryName.trim() || 
+                  (repositoryType === 'local' && !repositoryPath.trim()) ||
+                  (repositoryType === 'github' && !githubUrl.trim())
+                }
               >
                 {isRegistering ? 'Registering...' : 'Register Repository'}
               </button>

@@ -26,6 +26,7 @@ class ConversationState(TypedDict):
         messages: List of previous messages in the conversation
         conversation_id: ID of the current conversation
         user_message: The current user message being processed
+        thinking_mode: Thinking mode ("thinking" or "deep_thinking")
         intent: Classified intent of the user message (splunk_query, general_chat, etc.)
         needs_splunk_query: Boolean indicating if a Splunk query is needed
         splunk_query: Generated or extracted Splunk query (if applicable)
@@ -34,10 +35,14 @@ class ConversationState(TypedDict):
         blocks: List of structured blocks (queries, charts, tables, etc.)
         is_streaming: Boolean indicating if response is being streamed
         error: Error message if processing fails
+        use_exhaustive: Boolean indicating if exhaustive search should be used
+        use_case: Use case type (migration, impact_analysis, etc.)
+        exhaustive_reasoning: Reasoning for exhaustive search decision
     """
     messages: List[Dict[str, Any]]
     conversation_id: int
     user_message: str
+    thinking_mode: Optional[str]
     intent: Optional[str]
     needs_splunk_query: bool
     splunk_query: Optional[str]
@@ -46,6 +51,9 @@ class ConversationState(TypedDict):
     blocks: List[Dict[str, Any]]
     is_streaming: bool
     error: Optional[str]
+    use_exhaustive: Optional[bool]
+    use_case: Optional[str]
+    exhaustive_reasoning: Optional[str]
 
 
 async def classify_intent(state: ConversationState) -> ConversationState:
@@ -349,11 +357,45 @@ async def generate_llm_response(state: ConversationState) -> ConversationState:
     return state
 
 
+async def detect_exhaustive_search_needed(state: ConversationState) -> ConversationState:
+    """
+    Detect if exhaustive search is needed based on query intent.
+    
+    Args:
+        state: Current conversation state
+    
+    Returns:
+        ConversationState: Updated with use_case and use_exhaustive flags
+    """
+    from app.services.advanced_rag_service import advanced_rag_service
+    from app.core.database import engine
+    from sqlmodel import Session
+    
+    user_message = state.get("user_message", "")
+    
+    try:
+        with Session(engine) as session:
+            # Check if exhaustive search is needed
+            analysis = await advanced_rag_service.should_use_exhaustive_search(user_message)
+            
+            state["use_exhaustive"] = analysis.get("use_exhaustive", False)
+            state["use_case"] = analysis.get("use_case", "general")
+            state["exhaustive_reasoning"] = analysis.get("reasoning", "")
+    except Exception as e:
+        print(f"⚠️ Error detecting exhaustive search need: {e}")
+        state["use_exhaustive"] = False
+        state["use_case"] = "general"
+    
+    return state
+
+
 async def handle_java_code_question(state: ConversationState) -> ConversationState:
     """
-    Handle Java code questions using code intelligence service.
+    Handle code questions using code intelligence service.
+    Supports both standard and exhaustive multi-hop search.
+    Uses thinking mode from conversation to determine search depth.
     
-    Detects Java code questions, retrieves relevant code chunks,
+    Detects code questions, retrieves relevant code chunks,
     and generates answers with citations.
     
     Args:
@@ -368,32 +410,65 @@ async def handle_java_code_question(state: ConversationState) -> ConversationSta
     
     user_message = state.get("user_message", "")
     conversation_id = state.get("conversation_id", 0)
+    thinking_mode = state.get("thinking_mode", "thinking")
     
-    # Check if Java indexer is enabled
+    # Determine exhaustive search based on thinking mode
+    # Deep thinking always uses exhaustive, thinking mode uses intelligent detection
+    if thinking_mode == "deep_thinking":
+        use_exhaustive = True
+        use_case = state.get("use_case") or "comprehensive_analysis"
+    else:
+        # Use intelligent detection from state (set by detect_exhaustive_search_needed)
+        use_exhaustive = state.get("use_exhaustive", False)
+        use_case = state.get("use_case")
+    
+    # Check if code indexer is enabled
     if not settings.java_indexer_enabled:
-        state["response_text"] = "Java code intelligence is not enabled. Please enable it in configuration."
+        state["response_text"] = "Code intelligence is not enabled. Please enable it in configuration."
         state["blocks"] = []
         return state
     
     try:
-        # Get database session (simplified - in production, use proper dependency injection)
-        # For now, we'll create a session
+        # Get database session
         from app.core.database import engine
         with Session(engine) as session:
-            # Answer the code question
+            # Answer the code question (with optional exhaustive search)
             result = await java_llm_service.answer_code_question(
                 session=session,
                 query=user_message,
                 repository_id=None,  # Search across all repositories
-                conversation_history=state.get("messages", [])
+                conversation_history=state.get("messages", []),
+                use_exhaustive=use_exhaustive,
+                use_case=use_case
             )
             
             answer = result.get("answer", "")
             evidence = result.get("evidence", [])
             citations = result.get("citations", [])
+            completeness_check = result.get("completeness_check")
             
             # Format response with code blocks
             blocks = []
+            
+            # Add completeness info if available
+            if completeness_check:
+                completeness_info = f"""## Search Completeness
+
+- **Use Case**: {completeness_check.get('use_case', 'general')}
+- **Completeness**: {completeness_check.get('completeness_percentage', 0)}%
+- **Confidence**: {completeness_check.get('confidence', 'unknown')}
+- **REST Endpoints Found**: {completeness_check.get('rest_endpoints_found', 0)}
+- **Functions Found**: {completeness_check.get('functions_found', 0)}
+- **Files Found**: {completeness_check.get('files_found', 0)}
+
+{completeness_check.get('reasoning', '')}
+"""
+                blocks.append({
+                    "type": "markdown",
+                    "data": {
+                        "content": completeness_info
+                    }
+                })
             
             # Add answer as markdown block
             blocks.append({
@@ -404,20 +479,26 @@ async def handle_java_code_question(state: ConversationState) -> ConversationSta
             })
             
             # Add code blocks for evidence
-            for ev in evidence[:3]:  # Top 3 evidence chunks
+            for ev in evidence[:5]:  # Top 5 evidence chunks (more for exhaustive)
                 file_path = ev.get("file_path", "")
                 fqn = ev.get("fqn", "")
-                code = ev.get("code", "")
+                code = ev.get("code") or ev.get("code_chunk", "")
                 start_line = ev.get("start_line", 0)
                 end_line = ev.get("end_line", 0)
+                language = ev.get("language", "java")
+                relationship = ev.get("relationship")
                 
                 if code:
+                    title = f"{fqn} ({file_path}:{start_line}-{end_line})"
+                    if relationship:
+                        title += f" [via {relationship}]"
+                    
                     blocks.append({
                         "type": "code",
                         "data": {
-                            "code": code,
-                            "language": "java",
-                            "title": f"{fqn} ({file_path}:{start_line}-{end_line})"
+                            "code": code[:1000],  # Limit code length
+                            "language": language,
+                            "title": title
                         }
                     })
             
@@ -425,7 +506,7 @@ async def handle_java_code_question(state: ConversationState) -> ConversationSta
             state["blocks"] = blocks
             
     except Exception as e:
-        print(f"❌ Error handling Java code question: {e}")
+        print(f"❌ Error handling code question: {e}")
         import traceback
         print(traceback.format_exc())
         state["error"] = str(e)
@@ -593,6 +674,7 @@ def create_conversation_graph() -> StateGraph:
     
     # Add nodes
     graph.add_node("classify_intent", classify_intent)
+    graph.add_node("detect_exhaustive_search", detect_exhaustive_search_needed)
     graph.add_node("generate_splunk_query", generate_splunk_query)
     graph.add_node("execute_splunk_query", execute_splunk_query)
     graph.add_node("handle_java_code_question", handle_java_code_question)
@@ -609,11 +691,14 @@ def create_conversation_graph() -> StateGraph:
         route_based_on_intent,
         {
             "splunk_query": "generate_splunk_query",
-            "java_code_question": "handle_java_code_question",
+            "java_code_question": "detect_exhaustive_search",  # Route through exhaustive detection
             "general_chat": "generate_llm_response",
             "mock_response": "generate_mock_response"
         }
     )
+    
+    # Route from exhaustive detection to code question handler
+    graph.add_edge("detect_exhaustive_search", "handle_java_code_question")
     
     # Add edge from Java code question handler
     graph.add_edge("handle_java_code_question", "format_response_blocks")
@@ -646,7 +731,8 @@ conversation_graph = create_conversation_graph()
 async def process_conversation(
     user_message: str,
     conversation_id: int,
-    conversation_history: List[Dict[str, Any]]
+    conversation_history: List[Dict[str, Any]],
+    thinking_mode: str = "thinking"
 ) -> Dict[str, Any]:
     """
     Process a conversation turn using LangGraph.
@@ -659,6 +745,7 @@ async def process_conversation(
         conversation_id: ID of the conversation
         conversation_history: Previous messages in format:
             [{"role": "user|assistant", "content": "..."}, ...]
+        thinking_mode: Thinking mode ("thinking" or "deep_thinking")
     
     Returns:
         Dict[str, Any]: Final state with response_text and blocks
@@ -668,11 +755,22 @@ async def process_conversation(
         - Graph execution failure: returns error state
         - Invalid state: handles gracefully
     """
+    # Detect mode change requests in message
+    message_lower = user_message.lower().strip()
+    detected_mode = thinking_mode
+    
+    # Check if user explicitly requests mode change
+    if "deep thinking" in message_lower or "deep_thinking" in message_lower or "deep-thinking" in message_lower:
+        detected_mode = "deep_thinking"
+    elif "thinking" in message_lower and "deep" not in message_lower and len(message_lower.split()) <= 3:
+        detected_mode = "thinking"
+    
     # Initialize state
     initial_state: ConversationState = {
         "messages": conversation_history,
         "conversation_id": conversation_id,
         "user_message": user_message,
+        "thinking_mode": detected_mode,
         "intent": None,
         "needs_splunk_query": False,
         "splunk_query": None,
@@ -680,7 +778,10 @@ async def process_conversation(
         "response_text": "",
         "blocks": [],
         "is_streaming": False,
-        "error": None
+        "error": None,
+        "use_exhaustive": None,
+        "use_case": None,
+        "exhaustive_reasoning": None
     }
     
     try:
@@ -691,7 +792,8 @@ async def process_conversation(
         return {
             "content": final_state.get("response_text", ""),
             "blocks": final_state.get("blocks", []),
-            "error": final_state.get("error")
+            "error": final_state.get("error"),
+            "thinking_mode": final_state.get("thinking_mode", thinking_mode)
         }
     except Exception as e:
         print(f"❌ Error processing conversation: {e}")
