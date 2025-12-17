@@ -1,0 +1,53 @@
+.agent-selector {
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-selector-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.agent-selector-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-btn {
+  padding: 6px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #f9fafb;
+  color: #111827;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  font-size: 12px;
+}
+
+.agent-btn:hover {
+  border-color: #818cf8;
+  background: #eef2ff;
+  color: #1f2937;
+}
+
+.agent-btn.active {
+  border-color: #4f46e5;
+  background: #eef2ff;
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.agent-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agent-selector-hint {
+  font-size: 12px;
+  color: #6b7280;
+}
+

@@ -35,9 +35,11 @@ async def create_conversation(
 ):
     """Create a new conversation."""
     db_conversation = Conversation(**conversation.model_dump())
-    # Default thinking mode is "thinking"
+    # Default thinking mode and agent
     if not hasattr(db_conversation, 'thinking_mode') or not db_conversation.thinking_mode:
         db_conversation.thinking_mode = "thinking"
+    if not hasattr(db_conversation, 'agent') or not db_conversation.agent:
+        db_conversation.agent = "ask"
     session.add(db_conversation)
     session.commit()
     session.refresh(db_conversation)
@@ -71,6 +73,40 @@ async def update_thinking_mode(
         )
     
     conversation.thinking_mode = thinking_mode
+    session.add(conversation)
+    session.commit()
+    session.refresh(conversation)
+    return conversation
+
+
+class AgentUpdate(BaseModel):
+    agent: str
+
+
+@router.patch("/{conversation_id}/agent", response_model=ConversationRead)
+async def update_agent(
+    conversation_id: int,
+    request: AgentUpdate,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[str, Depends(get_current_user)],
+):
+    """Update agent selection for a conversation."""
+    agent = request.agent
+    allowed_agents = ["ask", "plan", "observability_ag", "analysis_ag"]
+    if agent not in allowed_agents:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"agent must be one of {allowed_agents}"
+        )
+    
+    conversation = session.get(Conversation, conversation_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found"
+        )
+    
+    conversation.agent = agent
     session.add(conversation)
     session.commit()
     session.refresh(conversation)

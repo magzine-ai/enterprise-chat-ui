@@ -27,6 +27,7 @@ class ConversationState(TypedDict):
         conversation_id: ID of the current conversation
         user_message: The current user message being processed
         thinking_mode: Thinking mode ("thinking" or "deep_thinking")
+        agent: Active agent ("ask", "plan", "observability_ag", "analysis_ag")
         intent: Classified intent of the user message (splunk_query, general_chat, etc.)
         needs_splunk_query: Boolean indicating if a Splunk query is needed
         splunk_query: Generated or extracted Splunk query (if applicable)
@@ -43,6 +44,7 @@ class ConversationState(TypedDict):
     conversation_id: int
     user_message: str
     thinking_mode: Optional[str]
+    agent: Optional[str]
     intent: Optional[str]
     needs_splunk_query: bool
     splunk_query: Optional[str]
@@ -411,10 +413,14 @@ async def handle_java_code_question(state: ConversationState) -> ConversationSta
     user_message = state.get("user_message", "")
     conversation_id = state.get("conversation_id", 0)
     thinking_mode = state.get("thinking_mode", "thinking")
+    agent = state.get("agent", "ask")
     
     # Determine exhaustive search based on thinking mode
     # Deep thinking always uses exhaustive, thinking mode uses intelligent detection
-    if thinking_mode == "deep_thinking":
+    if agent == "analysis_ag":
+        use_exhaustive = True
+        use_case = state.get("use_case") or "comprehensive_analysis"
+    elif thinking_mode == "deep_thinking":
         use_exhaustive = True
         use_case = state.get("use_case") or "comprehensive_analysis"
     else:
@@ -732,7 +738,8 @@ async def process_conversation(
     user_message: str,
     conversation_id: int,
     conversation_history: List[Dict[str, Any]],
-    thinking_mode: str = "thinking"
+    thinking_mode: str = "thinking",
+    agent: str = "ask"
 ) -> Dict[str, Any]:
     """
     Process a conversation turn using LangGraph.
@@ -771,6 +778,7 @@ async def process_conversation(
         "conversation_id": conversation_id,
         "user_message": user_message,
         "thinking_mode": detected_mode,
+        "agent": agent,
         "intent": None,
         "needs_splunk_query": False,
         "splunk_query": None,
@@ -793,7 +801,8 @@ async def process_conversation(
             "content": final_state.get("response_text", ""),
             "blocks": final_state.get("blocks", []),
             "error": final_state.get("error"),
-            "thinking_mode": final_state.get("thinking_mode", thinking_mode)
+            "thinking_mode": final_state.get("thinking_mode", thinking_mode),
+            "agent": final_state.get("agent", agent)
         }
     except Exception as e:
         print(f"❌ Error processing conversation: {e}")

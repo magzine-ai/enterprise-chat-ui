@@ -25,6 +25,7 @@ const conversationsSlice = createSlice({
         id: conv.id,
         title: conv.title,
         thinking_mode: conv.thinking_mode || 'thinking',
+        agent: conv.agent || 'ask',
         created_at: conv.created_at,
         updated_at: conv.updated_at,
       }));
@@ -41,6 +42,7 @@ const conversationsSlice = createSlice({
         id: action.payload.id,
         title: action.payload.title,
         thinking_mode: action.payload.thinking_mode || 'thinking',
+        agent: action.payload.agent || 'ask',
         created_at: action.payload.created_at,
         updated_at: action.payload.updated_at,
       };
@@ -51,6 +53,7 @@ const conversationsSlice = createSlice({
           id: conv.id,
           title: conv.title,
           thinking_mode: conv.thinking_mode || 'thinking',
+          agent: conv.agent || 'ask',
           created_at: conv.created_at,
           updated_at: conv.updated_at,
         }))
@@ -87,6 +90,7 @@ const conversationsSlice = createSlice({
               id: conv.id,
               title: action.payload.title !== undefined ? action.payload.title : conv.title,
               thinking_mode: conv.thinking_mode || 'thinking',
+              agent: conv.agent || 'ask',
               created_at: conv.created_at,
               updated_at: new Date().toISOString(),
             };
@@ -95,6 +99,7 @@ const conversationsSlice = createSlice({
             id: conv.id,
             title: conv.title,
             thinking_mode: conv.thinking_mode || 'thinking',
+            agent: conv.agent || 'ask',
             created_at: conv.created_at,
             updated_at: conv.updated_at,
           };
@@ -115,6 +120,20 @@ const conversationsSlice = createSlice({
         });
       }
     },
+    updateConversationAgent: (state, action: PayloadAction<{ id: number; agent: string }>) => {
+      const index = state.conversations.findIndex(conv => conv.id === action.payload.id);
+      if (index !== -1) {
+        state.conversations = state.conversations.map((conv, i) => {
+          if (i === index) {
+            return {
+              ...conv,
+              agent: action.payload.agent,
+            };
+          }
+          return conv;
+        });
+      }
+    },
     deleteConversation: (state, action: PayloadAction<number>) => {
       // Filter out the conversation to delete and create new objects
       const newConversations = state.conversations
@@ -123,6 +142,7 @@ const conversationsSlice = createSlice({
           id: conv.id,
           title: conv.title,
           thinking_mode: conv.thinking_mode || 'thinking',
+          agent: conv.agent || 'ask',
           created_at: conv.created_at,
           updated_at: conv.updated_at,
         }));
@@ -146,6 +166,7 @@ export const {
   setCurrentConversation,
   updateConversation,
   updateConversationThinkingMode,
+  updateConversationAgent,
   deleteConversation,
   setLoading,
 } = conversationsSlice.actions;

@@ -247,6 +247,13 @@ class ApiService {
     });
   }
 
+  async updateAgent(conversationId: number, agent: string): Promise<any> {
+    return this.request(`/conversations/${conversationId}/agent`, {
+      method: 'PATCH',
+      body: JSON.stringify({ agent }),
+    });
+  }
+
   async buildRepositoryGraph(repositoryId: number, rebuild: boolean = false): Promise<any> {
     return this.request(`/java/repositories/${repositoryId}/build-graph?rebuild=${rebuild}`, {
       method: 'POST',

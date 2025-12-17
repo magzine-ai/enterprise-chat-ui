@@ -18,6 +18,7 @@ import {
   addConversation,
   setCurrentConversation,
   updateConversationThinkingMode,
+  updateConversationAgent,
 } from './store/slices/conversationsSlice';
 import { 
   setMessages, 
@@ -37,6 +38,7 @@ import ConversationSidebar from './components/ConversationSidebar';
 import MessageList from './components/MessageList';
 import MessageInput from './components/MessageInput';
 import ThinkingModeToggle from './components/ThinkingModeToggle';
+import AgentSelector from './components/AgentSelector';
 import './App.css';
 
 const AppContent: React.FC = () => {
@@ -427,6 +429,18 @@ const AppContent: React.FC = () => {
         </header>
         <main className="app-main">
           <MessageList />
+          <AgentSelector
+            conversationId={currentConversationId}
+            currentAgent={currentConversation?.agent}
+            onAgentChange={(agent) => {
+              if (currentConversationId) {
+                dispatch(updateConversationAgent({
+                  id: currentConversationId,
+                  agent,
+                }));
+              }
+            }}
+          />
           <ThinkingModeToggle
             conversationId={currentConversationId}
             currentMode={currentConversation?.thinking_mode}

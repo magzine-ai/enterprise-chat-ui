@@ -103,17 +103,22 @@ async def generate_assistant_response_async(job_id: str):
                         # Get thinking mode from conversation
                         conversation = session.get(Conversation, conversation_id)
                         thinking_mode = conversation.thinking_mode if conversation else "thinking"
+                        agent = conversation.agent if conversation and hasattr(conversation, "agent") else "ask"
                         
                         result = await process_conversation(
                             user_message=user_message_content,
                             conversation_id=conversation_id,
                             conversation_history=history,
-                            thinking_mode=thinking_mode
+                            thinking_mode=thinking_mode,
+                            agent=agent
                         )
                         
                         # Update thinking mode if it was changed
                         if conversation and result.get("thinking_mode") and result["thinking_mode"] != thinking_mode:
                             conversation.thinking_mode = result["thinking_mode"]
+                        # Persist agent if it changed downstream
+                        if conversation and result.get("agent") and result["agent"] != agent:
+                            conversation.agent = result["agent"]
                             session.add(conversation)
                             session.commit()
                         

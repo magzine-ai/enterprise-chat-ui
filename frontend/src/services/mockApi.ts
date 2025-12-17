@@ -61,6 +61,8 @@ class MockApiService {
     const conv: Conversation = {
       id: nextConversationId++,
       title: title || 'New Chat',
+      thinking_mode: 'thinking',
+      agent: 'ask',
       created_at: now,
       updated_at: now,
     };
@@ -77,6 +79,30 @@ class MockApiService {
       conversations = [
         ...conversations.slice(0, convIndex),
         { ...conversations[convIndex], title, updated_at: new Date().toISOString() },
+        ...conversations.slice(convIndex + 1),
+      ];
+    }
+  }
+
+  async updateThinkingMode(conversationId: number, thinkingMode: string): Promise<void> {
+    await this.delay();
+    const convIndex = conversations.findIndex((c) => c.id === conversationId);
+    if (convIndex !== -1) {
+      conversations = [
+        ...conversations.slice(0, convIndex),
+        { ...conversations[convIndex], thinking_mode: thinkingMode, updated_at: new Date().toISOString() },
+        ...conversations.slice(convIndex + 1),
+      ];
+    }
+  }
+
+  async updateAgent(conversationId: number, agent: string): Promise<void> {
+    await this.delay();
+    const convIndex = conversations.findIndex((c) => c.id === conversationId);
+    if (convIndex !== -1) {
+      conversations = [
+        ...conversations.slice(0, convIndex),
+        { ...conversations[convIndex], agent, updated_at: new Date().toISOString() },
         ...conversations.slice(convIndex + 1),
       ];
     }

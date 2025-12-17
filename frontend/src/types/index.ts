@@ -63,6 +63,7 @@ export interface Conversation {
   id: number;
   title?: string;
   thinking_mode?: string;
+  agent?: string;
   created_at: string;
   updated_at: string;
 }

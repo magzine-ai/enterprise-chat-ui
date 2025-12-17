@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 class ConversationBase(SQLModel):
     """Base conversation schema."""
     title: Optional[str] = None
+    agent: Optional[str] = Field(default="ask")  # "ask", "plan", "observability_ag", "analysis_ag"
 
 
 class Conversation(ConversationBase, table=True):
@@ -18,6 +19,7 @@ class Conversation(ConversationBase, table=True):
     
     id: Optional[int] = Field(default=None, primary_key=True)
     thinking_mode: str = Field(default="thinking")  # "thinking" or "deep_thinking"
+    agent: str = Field(default="ask")  # current agent selection
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     
@@ -34,6 +36,7 @@ class ConversationRead(ConversationBase):
     """Conversation read schema."""
     id: int
     thinking_mode: str = "thinking"
+    agent: str = "ask"
     created_at: datetime
     updated_at: datetime
 
