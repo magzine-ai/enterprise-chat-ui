@@ -80,8 +80,14 @@ class StandaloneParser:
         try:
             # Python
             python_lang = Language(tspython.language())
-            parser = Parser()
-            parser.set_language(python_lang)
+            # Support both old and new tree-sitter API
+            try:
+                # New API (tree-sitter >= 0.20.0): Parser(language)
+                parser = Parser(python_lang)
+            except TypeError:
+                # Old API (tree-sitter < 0.20.0): parser.set_language(language)
+                parser = Parser()
+                parser.set_language(python_lang)
             self.parsers['python'] = parser
         except Exception as e:
             print(f"⚠️ Failed to init Python parser: {e}")
@@ -89,8 +95,14 @@ class StandaloneParser:
         try:
             # Java
             java_lang = Language(tsjava.language())
-            parser = Parser()
-            parser.set_language(java_lang)
+            # Support both old and new tree-sitter API
+            try:
+                # New API (tree-sitter >= 0.20.0): Parser(language)
+                parser = Parser(java_lang)
+            except TypeError:
+                # Old API (tree-sitter < 0.20.0): parser.set_language(language)
+                parser = Parser()
+                parser.set_language(java_lang)
             self.parsers['java'] = parser
         except Exception as e:
             print(f"⚠️ Failed to init Java parser: {e}")
@@ -98,8 +110,14 @@ class StandaloneParser:
         try:
             # JavaScript/TypeScript
             js_lang = Language(tsjavascript.language())
-            parser = Parser()
-            parser.set_language(js_lang)
+            # Support both old and new tree-sitter API
+            try:
+                # New API (tree-sitter >= 0.20.0): Parser(language)
+                parser = Parser(js_lang)
+            except TypeError:
+                # Old API (tree-sitter < 0.20.0): parser.set_language(language)
+                parser = Parser()
+                parser.set_language(js_lang)
             self.parsers['javascript'] = parser
             self.parsers['typescript'] = parser
         except Exception as e:
