@@ -21,35 +21,150 @@ This guide explains how to execute the standalone scripts for building repositor
 ### Required Python Version
 - Python 3.8 or higher
 
-### Required Packages
+### Required Libraries
 
-Install the following packages:
+The standalone scripts require the following libraries. Install them based on your use case:
+
+#### Core Libraries (Required for Basic Functionality)
+
+**For `standalone_build_repo_independent.py` (Repository Indexing & Single File Mode):**
+
+```bash
+# TreeSitter for code parsing (REQUIRED)
+pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript
+
+# NetworkX for graph building (REQUIRED)
+pip install networkx
+```
+
+**For `standalone_query_to_html_independent.py` (Query & HTML Report):**
+
+```bash
+# OpenSearch client (REQUIRED for querying)
+pip install opensearch-py
+
+# NetworkX for graph operations (REQUIRED)
+pip install networkx
+```
+
+#### Optional Libraries (For Advanced Features)
+
+```bash
+# OpenAI for generating embeddings (OPTIONAL - only if you want embeddings)
+pip install openai
+
+# OpenSearch (OPTIONAL - only if you want to index chunks to OpenSearch)
+# Already included above if using query script
+```
+
+### Complete Installation Command
+
+**For full functionality (all features):**
 
 ```bash
 pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript \
             openai opensearch-py networkx
 ```
 
-**Or install individually:**
+**For minimal installation (single file mode, no embeddings, no OpenSearch):**
 
 ```bash
-# TreeSitter for parsing
-pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript
-
-# OpenAI for embeddings
-pip install openai
-
-# OpenSearch for vector search
-pip install opensearch-py
-
-# NetworkX for graph building
-pip install networkx
+pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript networkx
 ```
 
-### Optional Dependencies
+**For query script only:**
 
-- **OpenSearch**: Required only if you want to index chunks to OpenSearch
-- **OpenAI API Key**: Required only if you want to generate embeddings
+```bash
+pip install opensearch-py networkx
+```
+
+### Library Details
+
+| Library | Purpose | Required For | Optional For |
+|---------|---------|--------------|--------------|
+| `tree-sitter` | Core parsing engine | ✅ All parsing operations | - |
+| `tree-sitter-python` | Python code parsing | ✅ Python files | - |
+| `tree-sitter-java` | Java code parsing | ✅ Java files | - |
+| `tree-sitter-javascript` | JavaScript/TypeScript parsing | ✅ JS/TS files | - |
+| `networkx` | Graph data structure | ✅ Graph building & operations | - |
+| `openai` | Embedding generation | - | ✅ Embeddings (if needed) |
+| `opensearch-py` | OpenSearch client | ✅ Query script | ✅ Indexing (if needed) |
+
+### Standard Library (No Installation Required)
+
+These are part of Python's standard library:
+- `argparse` - Command-line argument parsing
+- `asyncio` - Asynchronous operations
+- `json` - JSON serialization
+- `pickle` - Graph serialization
+- `pathlib` - File path operations
+- `typing` - Type hints
+- `datetime` - Date/time operations
+- `html` - HTML generation (query script)
+- `os`, `re` - Utility functions
+
+### Feature-Specific Requirements
+
+#### Single File Mode (No Database/OpenSearch Needed)
+
+For generating chunks for a single file without indexing:
+
+```bash
+# Minimum required
+pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript networkx
+```
+
+**Note**: No OpenAI or OpenSearch needed for single file chunk generation.
+
+#### Full Repository Indexing
+
+For indexing entire repositories with embeddings:
+
+```bash
+# Full installation
+pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript \
+            openai opensearch-py networkx
+```
+
+#### Query & HTML Report Generation
+
+For querying OpenSearch and generating HTML reports:
+
+```bash
+# Required
+pip install opensearch-py networkx
+```
+
+### Verification
+
+After installation, verify all dependencies:
+
+```bash
+# Check all core libraries
+python -c "
+import tree_sitter
+import tree_sitter_python
+import tree_sitter_java
+import tree_sitter_javascript
+import networkx
+print('✅ Core libraries installed')
+"
+
+# Check optional libraries
+python -c "
+try:
+    import openai
+    print('✅ OpenAI installed')
+except ImportError:
+    print('⚠️ OpenAI not installed (optional)')
+
+try:
+    import opensearchpy
+    print('✅ OpenSearch installed')
+except ImportError:
+    print('⚠️ OpenSearch not installed (optional)')
+"
+```
 
 ---
 
