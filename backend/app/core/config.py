@@ -76,9 +76,20 @@ class Settings(BaseSettings):
     java_repositories_path: str = "./repositories"  # Base path for Java repositories
     java_indexer_batch_size: int = 100  # Batch size for processing chunks
     java_embedding_model: str = "text-embedding-3-small"  # Embedding model for code chunks
-    java_max_chunk_size: int = 1000  # Maximum characters per chunk
+    java_max_chunk_size: int = 1000  # Maximum characters per chunk (enforced during chunking)
     java_opensearch_index: str = "java_code_chunks"  # OpenSearch index for Java chunks
     java_opensearch_enabled: bool = False  # Enable OpenSearch integration for Java code intelligence
+    
+    # Chunking Strategy Configuration
+    # Options: "method_only", "class_metadata", "recursive", "sliding_window", "hybrid"
+    # - method_only: Only create method-level chunks (best for search, smallest chunks)
+    # - class_metadata: Method chunks + class metadata chunks (no full class body)
+    # - recursive: Method chunks + recursively split large classes/methods by logical blocks
+    # - sliding_window: Method chunks + overlapping windows for large classes (preserves context)
+    # - hybrid: Method chunks + class metadata + file chunks for small files only
+    java_chunking_strategy: str = "class_metadata"  # Default: industry best practice
+    java_chunk_overlap_size: int = 50  # Overlap size for sliding_window strategy (characters)
+    java_enforce_chunk_size: bool = True  # Enforce max_chunk_size during chunking (not just display)
     
     # GitHub Integration
     github_token: Optional[str] = None  # GitHub Personal Access Token for private repos

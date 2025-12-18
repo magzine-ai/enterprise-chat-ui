@@ -589,7 +589,14 @@ class JavaIndexerService:
     ) -> List[Dict[str, Any]]:
         """
         Generate chunks at multiple levels from parsed code file.
-        Supports multiple languages with unified chunking strategy.
+        Supports multiple languages and configurable chunking strategies.
+        
+        Strategies:
+        - method_only: Only method-level chunks (smallest, best for search)
+        - class_metadata: Method chunks + class metadata (no full class body)
+        - recursive: Method chunks + recursively split large classes/methods
+        - sliding_window: Method chunks + overlapping windows for large classes
+        - hybrid: Method chunks + class metadata + file chunks (small files only)
         
         Args:
             parsed_data: Parsed AST information
@@ -600,93 +607,25 @@ class JavaIndexerService:
         Returns:
             List of chunk dictionaries ready for database storage
         """
-        chunks = []
-        file_path = parsed_data['file_path']
-        language = language or parsed_data.get('language', 'java')
-        lines = file_content.split('\n')
+        strategy = settings.java_chunking_strategy
+        max_size = settings.java_max_chunk_size
+        enforce_size = settings.java_enforce_chunk_size
         
-        # Generate method-level chunks
-        for method_info in parsed_data.get('methods', []):
-            method_fqn = method_info.get('fqn', '')
-            start_line = method_info.get('start_line', 1)
-            
-            # Find method end (basic - look for matching braces)
-            end_line = self._find_method_end(lines, start_line - 1)
-            
-            method_code = '\n'.join(lines[start_line - 1:end_line])
-            
-            # Generate summary
-            summary = self._generate_method_summary(method_info, method_code)
-            
-            chunk = {
-                'type': ChunkType.METHOD,
-                'fqn': method_fqn,
-                'file_path': file_path,
-                'start_line': start_line,
-                'end_line': end_line,
-                'code': method_code,
-                'summary': summary,
-                'imports': parsed_data.get('imports', []),
-                'annotations': method_info.get('annotations', []),
-                'callers': [],  # Will be populated during call graph building
-                'callees': [],  # Will be populated during call graph building
-                'repository_id': repository_id,
-                'last_modified': datetime.utcnow()
-            }
-            chunks.append(chunk)
-        
-        # Generate class-level chunks
-        for class_info in parsed_data.get('classes', []):
-            class_fqn = class_info.get('fqn', '')
-            start_line = class_info.get('start_line', 1)
-            
-            # Find class end
-            end_line = self._find_class_end(lines, start_line - 1)
-            
-            class_code = '\n'.join(lines[start_line - 1:end_line])
-            summary = self._generate_class_summary(class_info, class_code)
-            
-            # Get all methods in this class
-            class_methods = [
-                m for m in parsed_data.get('methods', [])
-                if m.get('class_fqn') == class_fqn
-            ]
-            
-            chunk = {
-                'type': ChunkType.CLASS,
-                'fqn': class_fqn,
-                'file_path': file_path,
-                'start_line': start_line,
-                'end_line': end_line,
-                'code': class_code,
-                'summary': summary,
-                'imports': parsed_data.get('imports', []),
-                'annotations': class_info.get('annotations', []),
-                'implemented_interfaces': class_info.get('implemented_interfaces', []),
-                'extended_class': class_info.get('extended_class'),
-                'repository_id': repository_id,
-                'last_modified': datetime.utcnow()
-            }
-            chunks.append(chunk)
-        
-        # Generate file-level chunk
-        if chunks:
-            file_summary = self._generate_file_summary(parsed_data, file_content)
-            chunk = {
-                'type': ChunkType.FILE,
-                'fqn': file_path,
-                'file_path': file_path,
-                'start_line': 1,
-                'end_line': len(lines),
-                'code': file_content,
-                'summary': file_summary,
-                'imports': parsed_data.get('imports', []),
-                'repository_id': repository_id,
-                'last_modified': datetime.utcnow()
-            }
-            chunks.append(chunk)
-        
-        return chunks
+        # Route to appropriate strategy
+        if strategy == "method_only":
+            return self._generate_chunks_method_only(parsed_data, file_content, repository_id, language, max_size, enforce_size)
+        elif strategy == "class_metadata":
+            return self._generate_chunks_class_metadata(parsed_data, file_content, repository_id, language, max_size, enforce_size)
+        elif strategy == "recursive":
+            return self._generate_chunks_recursive(parsed_data, file_content, repository_id, language, max_size, enforce_size)
+        elif strategy == "sliding_window":
+            return self._generate_chunks_sliding_window(parsed_data, file_content, repository_id, language, max_size, enforce_size)
+        elif strategy == "hybrid":
+            return self._generate_chunks_hybrid(parsed_data, file_content, repository_id, language, max_size, enforce_size)
+        else:
+            # Default to class_metadata if unknown strategy
+            print(f"⚠️ Unknown chunking strategy '{strategy}', using 'class_metadata'")
+            return self._generate_chunks_class_metadata(parsed_data, file_content, repository_id, language, max_size, enforce_size)
     
     def _find_method_end(self, lines: List[str], start_idx: int) -> int:
         """Find the end line of a method by matching braces."""
@@ -754,6 +693,640 @@ class JavaIndexerService:
             summary += f" and {len(methods)} method(s)"
         
         return summary
+    
+    # ============================================================================
+    # CHUNKING STRATEGY IMPLEMENTATIONS
+    # ============================================================================
+    
+    def _generate_chunks_method_only(
+        self,
+        parsed_data: Dict[str, Any],
+        file_content: str,
+        repository_id: int,
+        language: Optional[str],
+        max_size: int,
+        enforce_size: bool
+    ) -> List[Dict[str, Any]]:
+        """
+        Strategy 1: Method-Only Chunking
+        
+        Only creates method-level chunks. Best for:
+        - Precise search (smallest chunks)
+        - Fast retrieval
+        - Minimal storage
+        
+        Trade-off: No class-level context
+        """
+        chunks = []
+        file_path = parsed_data['file_path']
+        lines = file_content.split('\n')
+        
+        for method_info in parsed_data.get('methods', []):
+            method_fqn = method_info.get('fqn', '')
+            start_line = method_info.get('start_line', 1)
+            end_line = self._find_method_end(lines, start_line - 1)
+            method_code = '\n'.join(lines[start_line - 1:end_line])
+            
+            # Enforce size limit if enabled
+            if enforce_size and len(method_code) > max_size:
+                # Split large methods by logical blocks
+                method_chunks = self._split_large_method(method_code, max_size, method_info, file_path, start_line)
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(method_info, method_code, file_path, start_line, end_line, parsed_data, repository_id)
+                chunks.append(chunk)
+        
+        return chunks
+    
+    def _generate_chunks_class_metadata(
+        self,
+        parsed_data: Dict[str, Any],
+        file_content: str,
+        repository_id: int,
+        language: Optional[str],
+        max_size: int,
+        enforce_size: bool
+    ) -> List[Dict[str, Any]]:
+        """
+        Strategy 2: Class Metadata Chunking (RECOMMENDED)
+        
+        Creates method chunks + class metadata chunks (no full class body).
+        Industry best practice used by GitHub Copilot, Sourcegraph.
+        
+        Benefits:
+        - Method-level precision
+        - Class-level context without huge chunks
+        - Optimal balance of size and context
+        """
+        chunks = []
+        file_path = parsed_data['file_path']
+        lines = file_content.split('\n')
+        
+        # Generate method chunks (with size enforcement)
+        for method_info in parsed_data.get('methods', []):
+            method_fqn = method_info.get('fqn', '')
+            start_line = method_info.get('start_line', 1)
+            end_line = self._find_method_end(lines, start_line - 1)
+            method_code = '\n'.join(lines[start_line - 1:end_line])
+            
+            if enforce_size and len(method_code) > max_size:
+                method_chunks = self._split_large_method(method_code, max_size, method_info, file_path, start_line)
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(method_info, method_code, file_path, start_line, end_line, parsed_data, repository_id)
+                chunks.append(chunk)
+        
+        # Generate class metadata chunks (NO full class body)
+        for class_info in parsed_data.get('classes', []):
+            class_fqn = class_info.get('fqn', '')
+            start_line = class_info.get('start_line', 1)
+            
+            # Get all methods in this class
+            class_methods = [
+                m for m in parsed_data.get('methods', [])
+                if m.get('class_fqn') == class_fqn
+            ]
+            
+            # Create metadata-only chunk (no code body)
+            class_metadata_code = self._generate_class_signature(class_info, lines, start_line)
+            summary = self._generate_class_summary(class_info, "")
+            
+            chunk = {
+                'type': ChunkType.CLASS,
+                'fqn': class_fqn,
+                'file_path': file_path,
+                'start_line': start_line,
+                'end_line': start_line,  # Just the signature line
+                'code': class_metadata_code,  # Only signature, not full body
+                'summary': summary,
+                'imports': parsed_data.get('imports', []),
+                'annotations': class_info.get('annotations', []),
+                'implemented_interfaces': class_info.get('implemented_interfaces', []),
+                'extended_class': class_info.get('extended_class'),
+                'method_count': len(class_methods),
+                'method_fqns': [m.get('fqn', '') for m in class_methods],  # References only
+                'repository_id': repository_id,
+                'last_modified': datetime.utcnow()
+            }
+            chunks.append(chunk)
+        
+        return chunks
+    
+    def _generate_chunks_recursive(
+        self,
+        parsed_data: Dict[str, Any],
+        file_content: str,
+        repository_id: int,
+        language: Optional[str],
+        max_size: int,
+        enforce_size: bool
+    ) -> List[Dict[str, Any]]:
+        """
+        Strategy 3: Recursive Chunking
+        
+        Recursively splits large classes/methods by logical blocks (if/else, try/catch, loops).
+        Best for very large codebases where methods/classes exceed size limits.
+        """
+        chunks = []
+        file_path = parsed_data['file_path']
+        lines = file_content.split('\n')
+        
+        # Method chunks with recursive splitting
+        for method_info in parsed_data.get('methods', []):
+            method_fqn = method_info.get('fqn', '')
+            start_line = method_info.get('start_line', 1)
+            end_line = self._find_method_end(lines, start_line - 1)
+            method_code = '\n'.join(lines[start_line - 1:end_line])
+            
+            if enforce_size and len(method_code) > max_size:
+                # Recursively split by logical blocks
+                method_chunks = self._recursive_split_code(
+                    method_code, max_size, method_info, file_path, start_line, "method"
+                )
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(method_info, method_code, file_path, start_line, end_line, parsed_data, repository_id)
+                chunks.append(chunk)
+        
+        # Class chunks with recursive splitting
+        for class_info in parsed_data.get('classes', []):
+            class_fqn = class_info.get('fqn', '')
+            start_line = class_info.get('start_line', 1)
+            end_line = self._find_class_end(lines, start_line - 1)
+            class_code = '\n'.join(lines[start_line - 1:end_line])
+            
+            if enforce_size and len(class_code) > max_size:
+                # Recursively split class by methods/logical blocks
+                class_chunks = self._recursive_split_code(
+                    class_code, max_size, class_info, file_path, start_line, "class"
+                )
+                chunks.extend(class_chunks)
+            else:
+                # Small class - create metadata chunk
+                class_methods = [
+                    m for m in parsed_data.get('methods', [])
+                    if m.get('class_fqn') == class_fqn
+                ]
+                summary = self._generate_class_summary(class_info, class_code)
+                
+                chunk = {
+                    'type': ChunkType.CLASS,
+                    'fqn': class_fqn,
+                    'file_path': file_path,
+                    'start_line': start_line,
+                    'end_line': end_line,
+                    'code': class_code,
+                    'summary': summary,
+                    'imports': parsed_data.get('imports', []),
+                    'annotations': class_info.get('annotations', []),
+                    'implemented_interfaces': class_info.get('implemented_interfaces', []),
+                    'extended_class': class_info.get('extended_class'),
+                    'repository_id': repository_id,
+                    'last_modified': datetime.utcnow()
+                }
+                chunks.append(chunk)
+        
+        return chunks
+    
+    def _generate_chunks_sliding_window(
+        self,
+        parsed_data: Dict[str, Any],
+        file_content: str,
+        repository_id: int,
+        language: Optional[str],
+        max_size: int,
+        enforce_size: bool
+    ) -> List[Dict[str, Any]]:
+        """
+        Strategy 4: Sliding Window Chunking
+        
+        Creates overlapping windows for large classes to preserve context.
+        Best for maintaining semantic coherence across boundaries.
+        """
+        chunks = []
+        file_path = parsed_data['file_path']
+        lines = file_content.split('\n')
+        overlap_size = settings.java_chunk_overlap_size
+        
+        # Method chunks (standard)
+        for method_info in parsed_data.get('methods', []):
+            method_fqn = method_info.get('fqn', '')
+            start_line = method_info.get('start_line', 1)
+            end_line = self._find_method_end(lines, start_line - 1)
+            method_code = '\n'.join(lines[start_line - 1:end_line])
+            
+            if enforce_size and len(method_code) > max_size:
+                method_chunks = self._split_large_method(method_code, max_size, method_info, file_path, start_line)
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(method_info, method_code, file_path, start_line, end_line, parsed_data, repository_id)
+                chunks.append(chunk)
+        
+        # Class chunks with sliding window
+        for class_info in parsed_data.get('classes', []):
+            class_fqn = class_info.get('fqn', '')
+            start_line = class_info.get('start_line', 1)
+            end_line = self._find_class_end(lines, start_line - 1)
+            class_code = '\n'.join(lines[start_line - 1:end_line])
+            
+            if enforce_size and len(class_code) > max_size:
+                # Create overlapping windows
+                window_chunks = self._create_sliding_windows(
+                    class_code, max_size, overlap_size, class_info, file_path, start_line
+                )
+                chunks.extend(window_chunks)
+            else:
+                # Small class - create metadata chunk
+                class_methods = [
+                    m for m in parsed_data.get('methods', [])
+                    if m.get('class_fqn') == class_fqn
+                ]
+                summary = self._generate_class_summary(class_info, class_code)
+                
+                chunk = {
+                    'type': ChunkType.CLASS,
+                    'fqn': class_fqn,
+                    'file_path': file_path,
+                    'start_line': start_line,
+                    'end_line': end_line,
+                    'code': class_code,
+                    'summary': summary,
+                    'imports': parsed_data.get('imports', []),
+                    'annotations': class_info.get('annotations', []),
+                    'implemented_interfaces': class_info.get('implemented_interfaces', []),
+                    'extended_class': class_info.get('extended_class'),
+                    'repository_id': repository_id,
+                    'last_modified': datetime.utcnow()
+                }
+                chunks.append(chunk)
+        
+        return chunks
+    
+    def _generate_chunks_hybrid(
+        self,
+        parsed_data: Dict[str, Any],
+        file_content: str,
+        repository_id: int,
+        language: Optional[str],
+        max_size: int,
+        enforce_size: bool
+    ) -> List[Dict[str, Any]]:
+        """
+        Strategy 5: Hybrid Chunking
+        
+        Combines method chunks + class metadata + file chunks (only for small files).
+        Most comprehensive but uses more storage.
+        """
+        chunks = []
+        file_path = parsed_data['file_path']
+        lines = file_content.split('\n')
+        
+        # Method chunks
+        for method_info in parsed_data.get('methods', []):
+            method_fqn = method_info.get('fqn', '')
+            start_line = method_info.get('start_line', 1)
+            end_line = self._find_method_end(lines, start_line - 1)
+            method_code = '\n'.join(lines[start_line - 1:end_line])
+            
+            if enforce_size and len(method_code) > max_size:
+                method_chunks = self._split_large_method(method_code, max_size, method_info, file_path, start_line)
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(method_info, method_code, file_path, start_line, end_line, parsed_data, repository_id)
+                chunks.append(chunk)
+        
+        # Class metadata chunks (no full body)
+        for class_info in parsed_data.get('classes', []):
+            class_fqn = class_info.get('fqn', '')
+            start_line = class_info.get('start_line', 1)
+            
+            class_methods = [
+                m for m in parsed_data.get('methods', [])
+                if m.get('class_fqn') == class_fqn
+            ]
+            
+            class_metadata_code = self._generate_class_signature(class_info, lines, start_line)
+            summary = self._generate_class_summary(class_info, "")
+            
+            chunk = {
+                'type': ChunkType.CLASS,
+                'fqn': class_fqn,
+                'file_path': file_path,
+                'start_line': start_line,
+                'end_line': start_line,
+                'code': class_metadata_code,
+                'summary': summary,
+                'imports': parsed_data.get('imports', []),
+                'annotations': class_info.get('annotations', []),
+                'implemented_interfaces': class_info.get('implemented_interfaces', []),
+                'extended_class': class_info.get('extended_class'),
+                'method_count': len(class_methods),
+                'method_fqns': [m.get('fqn', '') for m in class_methods],
+                'repository_id': repository_id,
+                'last_modified': datetime.utcnow()
+            }
+            chunks.append(chunk)
+        
+        # File chunk - only for small files
+        if len(file_content) <= max_size:
+            file_summary = self._generate_file_summary(parsed_data, file_content)
+            chunk = {
+                'type': ChunkType.FILE,
+                'fqn': file_path,
+                'file_path': file_path,
+                'start_line': 1,
+                'end_line': len(lines),
+                'code': file_content,
+                'summary': file_summary,
+                'imports': parsed_data.get('imports', []),
+                'repository_id': repository_id,
+                'last_modified': datetime.utcnow()
+            }
+            chunks.append(chunk)
+        
+        return chunks
+    
+    # ============================================================================
+    # HELPER METHODS FOR CHUNKING STRATEGIES
+    # ============================================================================
+    
+    def _create_method_chunk(
+        self,
+        method_info: Dict[str, Any],
+        method_code: str,
+        file_path: str,
+        start_line: int,
+        end_line: int,
+        parsed_data: Dict[str, Any],
+        repository_id: int
+    ) -> Dict[str, Any]:
+        """Create a method chunk with standard fields."""
+        method_fqn = method_info.get('fqn', '')
+        summary = self._generate_method_summary(method_info, method_code)
+        
+        return {
+            'type': ChunkType.METHOD,
+            'fqn': method_fqn,
+            'file_path': file_path,
+            'start_line': start_line,
+            'end_line': end_line,
+            'code': method_code,
+            'summary': summary,
+            'imports': parsed_data.get('imports', []),
+            'annotations': method_info.get('annotations', []),
+            'callers': [],
+            'callees': [],
+            'repository_id': repository_id,
+            'last_modified': datetime.utcnow()
+        }
+    
+    def _generate_class_signature(self, class_info: Dict[str, Any], lines: List[str], start_line: int) -> str:
+        """Extract only the class signature line (declaration), not the full body."""
+        if start_line <= len(lines):
+            # Get the class declaration line (usually first line of class)
+            signature_line = lines[start_line - 1]
+            # Try to get a few more lines if it's a multi-line declaration
+            if '{' not in signature_line and start_line < len(lines):
+                # Multi-line declaration, get up to opening brace
+                sig_lines = [signature_line]
+                for i in range(start_line, min(start_line + 5, len(lines))):
+                    sig_lines.append(lines[i])
+                    if '{' in lines[i]:
+                        break
+                return '\n'.join(sig_lines)
+            return signature_line
+        return ""
+    
+    def _split_large_method(
+        self,
+        method_code: str,
+        max_size: int,
+        method_info: Dict[str, Any],
+        file_path: str,
+        start_line: int
+    ) -> List[Dict[str, Any]]:
+        """Split a large method into smaller chunks by logical blocks."""
+        chunks = []
+        lines = method_code.split('\n')
+        
+        # Try to split by logical blocks (if/else, try/catch, loops)
+        blocks = self._extract_logical_blocks(method_code)
+        
+        if len(blocks) > 1:
+            # Split by blocks
+            current_chunk_lines = []
+            current_start = start_line
+            chunk_idx = 0
+            
+            for block_lines in blocks:
+                block_code = '\n'.join(block_lines)
+                
+                if len('\n'.join(current_chunk_lines + block_lines)) > max_size and current_chunk_lines:
+                    # Current chunk is full, save it
+                    chunk_code = '\n'.join(current_chunk_lines)
+                    chunk_end = current_start + len(current_chunk_lines) - 1
+                    
+                    chunk = {
+                        'type': ChunkType.METHOD,
+                        'fqn': f"{method_info.get('fqn', '')}_part{chunk_idx}",
+                        'file_path': file_path,
+                        'start_line': current_start,
+                        'end_line': chunk_end,
+                        'code': chunk_code,
+                        'summary': f"{self._generate_method_summary(method_info, chunk_code)} (part {chunk_idx + 1})",
+                        'imports': [],
+                        'annotations': method_info.get('annotations', []),
+                        'callers': [],
+                        'callees': [],
+                        'repository_id': method_info.get('repository_id', 0),
+                        'last_modified': datetime.utcnow()
+                    }
+                    chunks.append(chunk)
+                    
+                    current_chunk_lines = block_lines
+                    current_start = chunk_end + 1
+                    chunk_idx += 1
+                else:
+                    current_chunk_lines.extend(block_lines)
+            
+            # Add remaining chunk
+            if current_chunk_lines:
+                chunk_code = '\n'.join(current_chunk_lines)
+                chunk_end = current_start + len(current_chunk_lines) - 1
+                chunk = {
+                    'type': ChunkType.METHOD,
+                    'fqn': f"{method_info.get('fqn', '')}_part{chunk_idx}",
+                    'file_path': file_path,
+                    'start_line': current_start,
+                    'end_line': chunk_end,
+                    'code': chunk_code,
+                    'summary': f"{self._generate_method_summary(method_info, chunk_code)} (part {chunk_idx + 1})",
+                    'imports': [],
+                    'annotations': method_info.get('annotations', []),
+                    'callers': [],
+                    'callees': [],
+                    'repository_id': method_info.get('repository_id', 0),
+                    'last_modified': datetime.utcnow()
+                }
+                chunks.append(chunk)
+        else:
+            # Can't split by blocks, split by line count
+            lines_per_chunk = max_size // 50  # Rough estimate: ~50 chars per line
+            for i in range(0, len(lines), lines_per_chunk):
+                chunk_lines = lines[i:i + lines_per_chunk]
+                chunk_code = '\n'.join(chunk_lines)
+                chunk_start = start_line + i
+                chunk_end = start_line + i + len(chunk_lines) - 1
+                
+                chunk = {
+                    'type': ChunkType.METHOD,
+                    'fqn': f"{method_info.get('fqn', '')}_part{i // lines_per_chunk}",
+                    'file_path': file_path,
+                    'start_line': chunk_start,
+                    'end_line': chunk_end,
+                    'code': chunk_code,
+                    'summary': f"{self._generate_method_summary(method_info, chunk_code)} (part {i // lines_per_chunk + 1})",
+                    'imports': [],
+                    'annotations': method_info.get('annotations', []),
+                    'callers': [],
+                    'callees': [],
+                    'repository_id': method_info.get('repository_id', 0),
+                    'last_modified': datetime.utcnow()
+                }
+                chunks.append(chunk)
+        
+        return chunks
+    
+    def _extract_logical_blocks(self, code: str) -> List[List[str]]:
+        """Extract logical blocks (if/else, try/catch, loops) from code."""
+        lines = code.split('\n')
+        blocks = []
+        current_block = []
+        indent_level = 0
+        in_block = False
+        
+        for line in lines:
+            stripped = line.lstrip()
+            current_indent = len(line) - len(stripped)
+            
+            # Detect block boundaries
+            if any(keyword in stripped for keyword in ['if (', 'else', 'try {', 'catch', 'for (', 'while (', 'switch']):
+                if current_block and current_indent <= indent_level:
+                    blocks.append(current_block)
+                    current_block = [line]
+                else:
+                    current_block.append(line)
+                in_block = True
+                indent_level = current_indent
+            elif in_block and current_indent <= indent_level and stripped.startswith('}'):
+                current_block.append(line)
+                blocks.append(current_block)
+                current_block = []
+                in_block = False
+            else:
+                current_block.append(line)
+        
+        if current_block:
+            blocks.append(current_block)
+        
+        return blocks if blocks else [lines]
+    
+    def _recursive_split_code(
+        self,
+        code: str,
+        max_size: int,
+        entity_info: Dict[str, Any],
+        file_path: str,
+        start_line: int,
+        entity_type: str
+    ) -> List[Dict[str, Any]]:
+        """Recursively split code by trying different strategies."""
+        if len(code) <= max_size:
+            # Base case: code fits
+            return [{
+                'type': ChunkType.METHOD if entity_type == "method" else ChunkType.CLASS,
+                'fqn': entity_info.get('fqn', ''),
+                'file_path': file_path,
+                'start_line': start_line,
+                'end_line': start_line + code.count('\n'),
+                'code': code,
+                'summary': entity_info.get('summary', ''),
+                'repository_id': entity_info.get('repository_id', 0),
+                'last_modified': datetime.utcnow()
+            }]
+        
+        # Try splitting by logical blocks first
+        blocks = self._extract_logical_blocks(code)
+        if len(blocks) > 1:
+            chunks = []
+            current_start = start_line
+            for block in blocks:
+                block_code = '\n'.join(block)
+                sub_chunks = self._recursive_split_code(
+                    block_code, max_size, entity_info, file_path, current_start, entity_type
+                )
+                chunks.extend(sub_chunks)
+                current_start += len(block)
+            return chunks
+        
+        # Fallback: split by lines
+        lines = code.split('\n')
+        lines_per_chunk = max_size // 50
+        chunks = []
+        for i in range(0, len(lines), lines_per_chunk):
+            chunk_lines = lines[i:i + lines_per_chunk]
+            chunk_code = '\n'.join(chunk_lines)
+            chunk_start = start_line + i
+            chunk_end = start_line + i + len(chunk_lines) - 1
+            
+            chunks.append({
+                'type': ChunkType.METHOD if entity_type == "method" else ChunkType.CLASS,
+                'fqn': f"{entity_info.get('fqn', '')}_part{i // lines_per_chunk}",
+                'file_path': file_path,
+                'start_line': chunk_start,
+                'end_line': chunk_end,
+                'code': chunk_code,
+                'summary': f"{entity_info.get('summary', '')} (part {i // lines_per_chunk + 1})",
+                'repository_id': entity_info.get('repository_id', 0),
+                'last_modified': datetime.utcnow()
+            })
+        
+        return chunks
+    
+    def _create_sliding_windows(
+        self,
+        code: str,
+        max_size: int,
+        overlap_size: int,
+        entity_info: Dict[str, Any],
+        file_path: str,
+        start_line: int
+    ) -> List[Dict[str, Any]]:
+        """Create overlapping windows for large code blocks."""
+        chunks = []
+        lines = code.split('\n')
+        window_size = max_size // 50  # Approximate lines per window
+        overlap_lines = overlap_size // 50
+        
+        for i in range(0, len(lines), window_size - overlap_lines):
+            window_lines = lines[i:min(i + window_size, len(lines))]
+            window_code = '\n'.join(window_lines)
+            window_start = start_line + i
+            window_end = start_line + i + len(window_lines) - 1
+            
+            chunks.append({
+                'type': ChunkType.CLASS,
+                'fqn': f"{entity_info.get('fqn', '')}_window{i // (window_size - overlap_lines)}",
+                'file_path': file_path,
+                'start_line': window_start,
+                'end_line': window_end,
+                'code': window_code,
+                'summary': f"{entity_info.get('summary', '')} (window {i // (window_size - overlap_lines) + 1})",
+                'repository_id': entity_info.get('repository_id', 0),
+                'last_modified': datetime.utcnow()
+            })
+        
+        return chunks
     
     async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
