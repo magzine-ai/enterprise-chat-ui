@@ -2,13 +2,19 @@
 Completely standalone script to parse a repository, generate OpenSearch chunks with embeddings,
 and create a knowledge graph. No dependencies on project structure.
 
-Usage:
+Usage (Full Repository):
   python standalone_build_repo_independent.py \
     --repo-path /path/to/repo \
     --output-dir ./output \
     --opensearch-host localhost:9200 \
     --opensearch-index code_chunks \
     --openai-api-key sk-...
+
+Usage (Single File - Generate Chunks as JSON):
+  python standalone_build_repo_independent.py \
+    --file /path/to/file.java \
+    --output chunks.json \
+    --chunking-strategy class_metadata
 
 Requirements:
   pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript \
@@ -705,14 +711,132 @@ class StandaloneGraphBuilder:
         }
 
 
+async def generate_chunks_for_file(
+    file_path: str,
+    output_path: str,
+    chunking_strategy: str = "class_metadata",
+    max_chunk_size: int = 1000,
+    enforce_size: bool = True,
+    chunk_overlap_size: int = 50
+):
+    """
+    Generate chunks for a single file and save to JSON.
+    
+    Args:
+        file_path: Path to the file to process
+        output_path: Output JSON file path
+        chunking_strategy: Chunking strategy to use
+        max_chunk_size: Maximum chunk size in characters
+        enforce_size: Whether to enforce chunk size limits
+        chunk_overlap_size: Overlap size for sliding_window strategy
+    """
+    file_path_obj = Path(file_path)
+    if not file_path_obj.exists():
+        raise SystemExit(f"❌ File not found: {file_path}")
+    
+    print(f"📄 Processing file: {file_path}")
+    print(f"   Strategy: {chunking_strategy}")
+    print(f"   Max chunk size: {max_chunk_size}")
+    print(f"   Enforce size: {enforce_size}")
+    
+    # Initialize indexer with specified strategy
+    indexer = StandaloneIndexer(
+        openai_api_key=None,  # Not needed for chunk generation
+        embedding_model="text-embedding-3-small",
+        chunking_strategy=chunking_strategy,
+        max_chunk_size=max_chunk_size,
+        enforce_chunk_size=enforce_size,
+        chunk_overlap_size=chunk_overlap_size
+    )
+    
+    # Parse file
+    parsed = indexer.parser.parse_file(str(file_path))
+    if not parsed:
+        raise SystemExit(f"❌ Failed to parse file: {file_path}")
+    
+    # Read file content
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        file_content = f.read()
+    
+    print(f"   File size: {len(file_content)} characters")
+    print(f"   Language: {parsed.get('language', 'unknown')}")
+    print(f"   Classes found: {len(parsed.get('classes', []))}")
+    print(f"   Methods found: {len(parsed.get('functions', []))}")
+    
+    # Generate chunks for this file
+    file_chunks = indexer._generate_chunks_for_file(parsed, str(file_path))
+    
+    print(f"✅ Generated {len(file_chunks)} chunks")
+    
+    # Prepare output data
+    output_data = {
+        "file_path": str(file_path),
+        "language": parsed.get('language', 'unknown'),
+        "chunking_strategy": chunking_strategy,
+        "max_chunk_size": max_chunk_size,
+        "enforce_size": enforce_size,
+        "chunk_overlap_size": chunk_overlap_size,
+        "total_chunks": len(file_chunks),
+        "chunks": []
+    }
+    
+    # Convert chunks to JSON-serializable format
+    for chunk in file_chunks:
+        chunk_data = {
+            "type": chunk.get('type', 'unknown'),
+            "fqn": chunk.get('fqn', ''),
+            "file_path": chunk.get('file_path', str(file_path)),
+            "start_line": chunk.get('start_line', 1),
+            "end_line": chunk.get('end_line', 1),
+            "code": chunk.get('code', ''),
+            "summary": chunk.get('summary', ''),
+            "code_size": len(chunk.get('code', '')),
+            "language": chunk.get('language', parsed.get('language', 'unknown')),
+        }
+        
+        output_data["chunks"].append(chunk_data)
+    
+    # Save to JSON file
+    output_path_obj = Path(output_path)
+    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(output_path_obj, 'w', encoding='utf-8') as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
+    
+    print(f"✅ Chunks saved to: {output_path}")
+    print(f"   Total chunks: {len(file_chunks)}")
+    
+    # Print chunk statistics
+    if file_chunks:
+        chunk_types = {}
+        for chunk in file_chunks:
+            chunk_type = chunk.get('type', 'unknown')
+            chunk_types[chunk_type] = chunk_types.get(chunk_type, 0) + 1
+        print(f"   Chunk types: {chunk_types}")
+        
+        chunk_sizes = [len(c.get('code', '')) for c in file_chunks]
+        avg_size = sum(chunk_sizes) / len(chunk_sizes)
+        max_size = max(chunk_sizes)
+        min_size = min(chunk_sizes)
+        print(f"   Chunk sizes: min={min_size}, avg={avg_size:.0f}, max={max_size}")
+
+
 async def main():
-    parser = argparse.ArgumentParser(description="Standalone repository indexer")
-    parser.add_argument("--repo-path", required=True, help="Repository path")
-    parser.add_argument("--output-dir", default="./output", help="Output directory")
+    parser = argparse.ArgumentParser(description="Standalone repository indexer or single file chunk generator")
+    
+    # Single file mode arguments
+    parser.add_argument("--file", help="Path to a specific file to generate chunks for (single file mode)")
+    parser.add_argument("--output", default="chunks.json", help="Output JSON file path for single file mode (default: chunks.json)")
+    
+    # Full repository mode arguments
+    parser.add_argument("--repo-path", help="Repository path (required for full repository mode)")
+    parser.add_argument("--output-dir", default="./output", help="Output directory (for full repository mode)")
     parser.add_argument("--opensearch-host", help="OpenSearch host (e.g., localhost:9200)")
     parser.add_argument("--opensearch-index", default="code_chunks", help="OpenSearch index name")
     parser.add_argument("--openai-api-key", help="OpenAI API key for embeddings")
     parser.add_argument("--embedding-model", default="text-embedding-3-small", help="Embedding model")
+    
+    # Common arguments
     parser.add_argument(
         "--chunking-strategy",
         default="class_metadata",
@@ -722,7 +846,24 @@ async def main():
     parser.add_argument("--max-chunk-size", type=int, default=1000, help="Maximum chunk size in characters (default: 1000)")
     parser.add_argument("--enforce-chunk-size", action="store_true", default=True, help="Enforce chunk size limits (default: True)")
     parser.add_argument("--chunk-overlap-size", type=int, default=50, help="Overlap size for sliding_window strategy (default: 50)")
+    
     args = parser.parse_args()
+    
+    # Single file mode
+    if args.file:
+        await generate_chunks_for_file(
+            file_path=args.file,
+            output_path=args.output,
+            chunking_strategy=args.chunking_strategy,
+            max_chunk_size=args.max_chunk_size,
+            enforce_size=args.enforce_chunk_size,
+            chunk_overlap_size=args.chunk_overlap_size
+        )
+        return
+    
+    # Full repository mode
+    if not args.repo_path:
+        raise SystemExit("❌ Either --file (single file mode) or --repo-path (full repository mode) is required.")
     
     # Create output directory
     output_dir = Path(args.output_dir)
