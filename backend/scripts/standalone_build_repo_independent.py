@@ -192,10 +192,22 @@ class StandaloneParser:
 class StandaloneIndexer:
     """Self-contained indexer for generating chunks and embeddings."""
     
-    def __init__(self, openai_api_key: Optional[str] = None, embedding_model: str = "text-embedding-3-small"):
+    def __init__(
+        self,
+        openai_api_key: Optional[str] = None,
+        embedding_model: str = "text-embedding-3-small",
+        chunking_strategy: str = "class_metadata",
+        max_chunk_size: int = 1000,
+        enforce_chunk_size: bool = True,
+        chunk_overlap_size: int = 50
+    ):
         self.parser = StandaloneParser()
         self.embedding_client = None
         self.embedding_model = embedding_model
+        self.chunking_strategy = chunking_strategy
+        self.max_chunk_size = max_chunk_size
+        self.enforce_chunk_size = enforce_chunk_size
+        self.chunk_overlap_size = chunk_overlap_size
         
         if OPENAI_AVAILABLE and openai_api_key:
             self.embedding_client = AsyncOpenAI(api_key=openai_api_key)
@@ -230,8 +242,12 @@ class StandaloneIndexer:
         return code_files
     
     async def process_repository(self, repo_path: str) -> List[Dict[str, Any]]:
-        """Process repository and generate chunks."""
+        """Process repository and generate chunks using configured strategy."""
         print(f"📁 Scanning repository: {repo_path}")
+        print(f"   Strategy: {self.chunking_strategy}")
+        print(f"   Max chunk size: {self.max_chunk_size}")
+        print(f"   Enforce size: {self.enforce_chunk_size}")
+        
         code_files = self.find_code_files(repo_path)
         print(f"   Found {len(code_files)} code files")
         
@@ -242,47 +258,303 @@ class StandaloneIndexer:
             if not parsed:
                 continue
             
-            # Generate chunks for functions
-            for func in parsed.get('functions', []):
-                chunk = {
-                    'type': 'method',
-                    'fqn': f"{Path(file_path).stem}.{func['name']}",
-                    'file_path': file_path,
-                    'start_line': func['start_line'],
-                    'end_line': func['end_line'],
-                    'code': func['code'],
-                    'summary': f"Method {func['name']}",
-                    'language': parsed['language'],
-                }
-                
-                # Generate embedding
-                embedding = await self.generate_embedding(chunk['code'])
-                if embedding:
-                    chunk['embedding'] = embedding
-                
-                all_chunks.append(chunk)
-            
-            # Generate chunks for classes
-            for cls in parsed.get('classes', []):
-                chunk = {
-                    'type': 'class',
-                    'fqn': f"{Path(file_path).stem}.{cls['name']}",
-                    'file_path': file_path,
-                    'start_line': cls['start_line'],
-                    'end_line': cls['end_line'],
-                    'code': '',  # Could extract class body
-                    'summary': f"Class {cls['name']}",
-                    'language': parsed['language'],
-                }
-                
-                embedding = await self.generate_embedding(chunk['summary'])
-                if embedding:
-                    chunk['embedding'] = embedding
-                
-                all_chunks.append(chunk)
+            # Generate chunks based on strategy
+            file_chunks = self._generate_chunks_for_file(parsed, file_path)
+            all_chunks.extend(file_chunks)
         
-        print(f"✅ Generated {len(all_chunks)} chunks")
+        # Generate embeddings for all chunks
+        print(f"📊 Generated {len(all_chunks)} chunks, generating embeddings...")
+        for chunk in all_chunks:
+            embedding = await self.generate_embedding(chunk.get('code') or chunk.get('summary', ''))
+            if embedding:
+                chunk['embedding'] = embedding
+        
+        print(f"✅ Generated {len(all_chunks)} chunks with embeddings")
         return all_chunks
+    
+    def _generate_chunks_for_file(self, parsed: Dict[str, Any], file_path: str) -> List[Dict[str, Any]]:
+        """Generate chunks for a file based on configured strategy."""
+        strategy = self.chunking_strategy
+        
+        if strategy == "method_only":
+            return self._generate_chunks_method_only(parsed, file_path)
+        elif strategy == "class_metadata":
+            return self._generate_chunks_class_metadata(parsed, file_path)
+        elif strategy == "recursive":
+            return self._generate_chunks_recursive(parsed, file_path)
+        elif strategy == "sliding_window":
+            return self._generate_chunks_sliding_window(parsed, file_path)
+        elif strategy == "hybrid":
+            return self._generate_chunks_hybrid(parsed, file_path)
+        else:
+            print(f"⚠️ Unknown strategy '{strategy}', using 'class_metadata'")
+            return self._generate_chunks_class_metadata(parsed, file_path)
+    
+    def _generate_chunks_method_only(self, parsed: Dict[str, Any], file_path: str) -> List[Dict[str, Any]]:
+        """Strategy 1: Method-only chunks."""
+        chunks = []
+        for func in parsed.get('functions', []):
+            code = func.get('code', '')
+            if self.enforce_chunk_size and len(code) > self.max_chunk_size:
+                # Split large methods
+                method_chunks = self._split_large_code(code, func, file_path, 'method')
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(func, parsed, file_path)
+                chunks.append(chunk)
+        return chunks
+    
+    def _generate_chunks_class_metadata(self, parsed: Dict[str, Any], file_path: str) -> List[Dict[str, Any]]:
+        """Strategy 2: Method chunks + class metadata (recommended)."""
+        chunks = []
+        
+        # Method chunks
+        for func in parsed.get('functions', []):
+            code = func.get('code', '')
+            if self.enforce_chunk_size and len(code) > self.max_chunk_size:
+                method_chunks = self._split_large_code(code, func, file_path, 'method')
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(func, parsed, file_path)
+                chunks.append(chunk)
+        
+        # Class metadata chunks (signature only, no full body)
+        for cls in parsed.get('classes', []):
+            chunk = self._create_class_metadata_chunk(cls, parsed, file_path)
+            chunks.append(chunk)
+        
+        return chunks
+    
+    def _generate_chunks_recursive(self, parsed: Dict[str, Any], file_path: str) -> List[Dict[str, Any]]:
+        """Strategy 3: Recursive splitting for large code."""
+        chunks = []
+        
+        # Method chunks with recursive splitting
+        for func in parsed.get('functions', []):
+            code = func.get('code', '')
+            if self.enforce_chunk_size and len(code) > self.max_chunk_size:
+                method_chunks = self._recursive_split_code(code, func, file_path, 'method')
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(func, parsed, file_path)
+                chunks.append(chunk)
+        
+        # Class chunks with recursive splitting
+        for cls in parsed.get('classes', []):
+            code = cls.get('code', '')
+            if self.enforce_chunk_size and len(code) > self.max_chunk_size:
+                class_chunks = self._recursive_split_code(code, cls, file_path, 'class')
+                chunks.extend(class_chunks)
+            else:
+                chunk = self._create_class_metadata_chunk(cls, parsed, file_path)
+                chunks.append(chunk)
+        
+        return chunks
+    
+    def _generate_chunks_sliding_window(self, parsed: Dict[str, Any], file_path: str) -> List[Dict[str, Any]]:
+        """Strategy 4: Sliding window for large classes."""
+        chunks = []
+        
+        # Method chunks
+        for func in parsed.get('functions', []):
+            code = func.get('code', '')
+            if self.enforce_chunk_size and len(code) > self.max_chunk_size:
+                method_chunks = self._split_large_code(code, func, file_path, 'method')
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(func, parsed, file_path)
+                chunks.append(chunk)
+        
+        # Class chunks with sliding window
+        for cls in parsed.get('classes', []):
+            code = cls.get('code', '')
+            if self.enforce_chunk_size and len(code) > self.max_chunk_size:
+                window_chunks = self._create_sliding_windows(code, cls, file_path)
+                chunks.extend(window_chunks)
+            else:
+                chunk = self._create_class_metadata_chunk(cls, parsed, file_path)
+                chunks.append(chunk)
+        
+        return chunks
+    
+    def _generate_chunks_hybrid(self, parsed: Dict[str, Any], file_path: str) -> List[Dict[str, Any]]:
+        """Strategy 5: Method + class metadata + file chunks (small files only)."""
+        chunks = []
+        
+        # Method chunks
+        for func in parsed.get('functions', []):
+            code = func.get('code', '')
+            if self.enforce_chunk_size and len(code) > self.max_chunk_size:
+                method_chunks = self._split_large_code(code, func, file_path, 'method')
+                chunks.extend(method_chunks)
+            else:
+                chunk = self._create_method_chunk(func, parsed, file_path)
+                chunks.append(chunk)
+        
+        # Class metadata chunks
+        for cls in parsed.get('classes', []):
+            chunk = self._create_class_metadata_chunk(cls, parsed, file_path)
+            chunks.append(chunk)
+        
+        # File chunk (only for small files)
+        file_content = parsed.get('file_content', '')
+        if file_content and len(file_content) <= self.max_chunk_size:
+            chunk = {
+                'type': 'file',
+                'fqn': file_path,
+                'file_path': file_path,
+                'start_line': 1,
+                'end_line': len(file_content.split('\n')),
+                'code': file_content,
+                'summary': f"File {Path(file_path).name}",
+                'language': parsed.get('language', 'unknown'),
+            }
+            chunks.append(chunk)
+        
+        return chunks
+    
+    def _create_method_chunk(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+        """Create a method chunk."""
+        return {
+            'type': 'method',
+            'fqn': f"{Path(file_path).stem}.{func['name']}",
+            'file_path': file_path,
+            'start_line': func.get('start_line', 1),
+            'end_line': func.get('end_line', 1),
+            'code': func.get('code', ''),
+            'summary': f"Method {func['name']}",
+            'language': parsed.get('language', 'unknown'),
+        }
+    
+    def _create_class_metadata_chunk(self, cls: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+        """Create a class metadata chunk (signature only, no full body)."""
+        # Extract only class signature, not full body
+        class_code = cls.get('code', '')
+        signature = class_code.split('{')[0] if '{' in class_code else class_code[:200]
+        
+        return {
+            'type': 'class',
+            'fqn': f"{Path(file_path).stem}.{cls['name']}",
+            'file_path': file_path,
+            'start_line': cls.get('start_line', 1),
+            'end_line': cls.get('start_line', 1),  # Just signature line
+            'code': signature,  # Only signature, not full body
+            'summary': f"Class {cls['name']}",
+            'language': parsed.get('language', 'unknown'),
+        }
+    
+    def _split_large_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str) -> List[Dict[str, Any]]:
+        """Split large code into smaller chunks."""
+        chunks = []
+        lines = code.split('\n')
+        lines_per_chunk = self.max_chunk_size // 50  # Rough estimate
+        
+        for i in range(0, len(lines), lines_per_chunk):
+            chunk_lines = lines[i:i + lines_per_chunk]
+            chunk_code = '\n'.join(chunk_lines)
+            chunk_start = entity.get('start_line', 1) + i
+            chunk_end = entity.get('start_line', 1) + i + len(chunk_lines) - 1
+            
+            chunks.append({
+                'type': entity_type,
+                'fqn': f"{Path(file_path).stem}.{entity['name']}_part{i // lines_per_chunk}",
+                'file_path': file_path,
+                'start_line': chunk_start,
+                'end_line': chunk_end,
+                'code': chunk_code,
+                'summary': f"{entity_type.title()} {entity['name']} (part {i // lines_per_chunk + 1})",
+                'language': 'unknown',
+            })
+        
+        return chunks
+    
+    def _recursive_split_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str) -> List[Dict[str, Any]]:
+        """Recursively split code by logical blocks."""
+        if len(code) <= self.max_chunk_size:
+            return [{
+                'type': entity_type,
+                'fqn': f"{Path(file_path).stem}.{entity['name']}",
+                'file_path': file_path,
+                'start_line': entity.get('start_line', 1),
+                'end_line': entity.get('end_line', 1),
+                'code': code,
+                'summary': f"{entity_type.title()} {entity['name']}",
+                'language': 'unknown',
+            }]
+        
+        # Try to split by logical blocks
+        blocks = self._extract_logical_blocks(code)
+        if len(blocks) > 1:
+            chunks = []
+            current_start = entity.get('start_line', 1)
+            for block in blocks:
+                block_code = '\n'.join(block)
+                sub_chunks = self._recursive_split_code(block_code, entity, file_path, entity_type)
+                chunks.extend(sub_chunks)
+                current_start += len(block)
+            return chunks
+        
+        # Fallback: split by lines
+        return self._split_large_code(code, entity, file_path, entity_type)
+    
+    def _extract_logical_blocks(self, code: str) -> List[List[str]]:
+        """Extract logical blocks (if/else, try/catch, loops) from code."""
+        lines = code.split('\n')
+        blocks = []
+        current_block = []
+        indent_level = 0
+        in_block = False
+        
+        for line in lines:
+            stripped = line.lstrip()
+            current_indent = len(line) - len(stripped)
+            
+            if any(kw in stripped for kw in ['if (', 'else', 'try {', 'catch', 'for (', 'while (', 'switch']):
+                if current_block and current_indent <= indent_level:
+                    blocks.append(current_block)
+                    current_block = [line]
+                else:
+                    current_block.append(line)
+                in_block = True
+                indent_level = current_indent
+            elif in_block and current_indent <= indent_level and stripped.startswith('}'):
+                current_block.append(line)
+                blocks.append(current_block)
+                current_block = []
+                in_block = False
+            else:
+                current_block.append(line)
+        
+        if current_block:
+            blocks.append(current_block)
+        
+        return blocks if blocks else [lines]
+    
+    def _create_sliding_windows(self, code: str, entity: Dict[str, Any], file_path: str) -> List[Dict[str, Any]]:
+        """Create overlapping windows for large code blocks."""
+        chunks = []
+        lines = code.split('\n')
+        window_size = self.max_chunk_size // 50
+        overlap_lines = self.chunk_overlap_size // 50
+        
+        for i in range(0, len(lines), window_size - overlap_lines):
+            window_lines = lines[i:min(i + window_size, len(lines))]
+            window_code = '\n'.join(window_lines)
+            window_start = entity.get('start_line', 1) + i
+            window_end = entity.get('start_line', 1) + i + len(window_lines) - 1
+            
+            chunks.append({
+                'type': 'class',
+                'fqn': f"{Path(file_path).stem}.{entity['name']}_window{i // (window_size - overlap_lines)}",
+                'file_path': file_path,
+                'start_line': window_start,
+                'end_line': window_end,
+                'code': window_code,
+                'summary': f"Class {entity['name']} (window {i // (window_size - overlap_lines) + 1})",
+                'language': 'unknown',
+            })
+        
+        return chunks
 
 
 class StandaloneOpenSearch:
@@ -441,6 +713,15 @@ async def main():
     parser.add_argument("--opensearch-index", default="code_chunks", help="OpenSearch index name")
     parser.add_argument("--openai-api-key", help="OpenAI API key for embeddings")
     parser.add_argument("--embedding-model", default="text-embedding-3-small", help="Embedding model")
+    parser.add_argument(
+        "--chunking-strategy",
+        default="class_metadata",
+        choices=["method_only", "class_metadata", "recursive", "sliding_window", "hybrid"],
+        help="Chunking strategy (default: class_metadata)"
+    )
+    parser.add_argument("--max-chunk-size", type=int, default=1000, help="Maximum chunk size in characters (default: 1000)")
+    parser.add_argument("--enforce-chunk-size", action="store_true", default=True, help="Enforce chunk size limits (default: True)")
+    parser.add_argument("--chunk-overlap-size", type=int, default=50, help="Overlap size for sliding_window strategy (default: 50)")
     args = parser.parse_args()
     
     # Create output directory
@@ -450,7 +731,11 @@ async def main():
     # Initialize components
     indexer = StandaloneIndexer(
         openai_api_key=args.openai_api_key,
-        embedding_model=args.embedding_model
+        embedding_model=args.embedding_model,
+        chunking_strategy=args.chunking_strategy,
+        max_chunk_size=args.max_chunk_size,
+        enforce_chunk_size=args.enforce_chunk_size,
+        chunk_overlap_size=args.chunk_overlap_size
     )
     
     # Process repository
