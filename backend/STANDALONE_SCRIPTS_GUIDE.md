@@ -195,9 +195,135 @@ python -c "import tree_sitter; import openai; import opensearchpy; import networ
 
 **File**: `scripts/standalone_build_repo_independent.py`
 
-This script parses a repository, generates chunks with embeddings, indexes to OpenSearch (optional), and builds a knowledge graph.
+This script can operate in two modes:
+1. **Single File Mode**: Generate chunks as JSON for a specific file (no database/OpenSearch needed)
+2. **Full Repository Mode**: Parse entire repository, generate chunks with embeddings, index to OpenSearch (optional), and build a knowledge graph
 
-### Basic Usage
+---
+
+### Single File Mode: Generate Chunks for a Specific File
+
+Generate chunks as JSON for a single file without requiring database, OpenSearch, or OpenAI.
+
+#### Basic Usage
+
+```bash
+python scripts/standalone_build_repo_independent.py \
+  --file /path/to/your/file.java \
+  --output chunks.json
+```
+
+#### Full Command with All Options
+
+```bash
+python scripts/standalone_build_repo_independent.py \
+  --file /path/to/your/file.java \
+  --output chunks.json \
+  --chunking-strategy class_metadata \
+  --max-chunk-size 1000 \
+  --enforce-chunk-size \
+  --chunk-overlap-size 50
+```
+
+#### Single File Mode Arguments
+
+| Argument | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `--file` | ✅ Yes (for single file mode) | - | Path to the file to generate chunks for |
+| `--output` | ❌ No | `chunks.json` | Output JSON file path |
+| `--chunking-strategy` | ❌ No | `class_metadata` | Chunking strategy (see below) |
+| `--max-chunk-size` | ❌ No | `1000` | Maximum chunk size in characters |
+| `--enforce-chunk-size` | ❌ No | `True` | Enforce chunk size limits |
+| `--chunk-overlap-size` | ❌ No | `50` | Overlap size for sliding_window strategy |
+
+#### Single File Mode Examples
+
+```bash
+# Generate chunks for a Java file
+python scripts/standalone_build_repo_independent.py \
+  --file ./src/main/java/com/example/UserService.java \
+  --output user_service_chunks.json \
+  --chunking-strategy class_metadata
+
+# Generate chunks with method_only strategy (smallest chunks)
+python scripts/standalone_build_repo_independent.py \
+  --file ./UserService.java \
+  --output chunks.json \
+  --chunking-strategy method_only \
+  --max-chunk-size 800
+
+# Generate chunks for a Python file
+python scripts/standalone_build_repo_independent.py \
+  --file ./utils.py \
+  --output utils_chunks.json \
+  --chunking-strategy recursive
+```
+
+#### Single File Mode Output
+
+The script generates a JSON file with the following structure:
+
+```json
+{
+  "file_path": "/path/to/UserService.java",
+  "language": "java",
+  "chunking_strategy": "class_metadata",
+  "max_chunk_size": 1000,
+  "enforce_size": true,
+  "chunk_overlap_size": 50,
+  "total_chunks": 15,
+  "chunks": [
+    {
+      "type": "method",
+      "fqn": "UserService.getUser",
+      "file_path": "/path/to/UserService.java",
+      "start_line": 10,
+      "end_line": 25,
+      "code": "public User getUser(String id) {\n  // implementation\n}",
+      "summary": "Method getUser",
+      "code_size": 150,
+      "language": "java"
+    },
+    {
+      "type": "class",
+      "fqn": "UserService",
+      "file_path": "/path/to/UserService.java",
+      "start_line": 5,
+      "end_line": 5,
+      "code": "public class UserService extends BaseService",
+      "summary": "Class UserService",
+      "code_size": 45,
+      "language": "java"
+    }
+  ]
+}
+```
+
+#### Supported File Types
+
+The script automatically detects and supports:
+- **Java**: `.java`
+- **Python**: `.py`
+- **JavaScript**: `.js`, `.jsx`
+- **TypeScript**: `.ts`, `.tsx`
+- **Go**: `.go`
+- **Rust**: `.rs`
+
+#### Single File Mode Benefits
+
+- ✅ **No Database Required**: Works without database or OpenSearch
+- ✅ **No OpenAI Needed**: Generates chunks without embeddings
+- ✅ **Fast**: Processes only one file
+- ✅ **Self-Contained**: All parsing logic is inline
+- ✅ **Easy Testing**: Test chunking strategies on individual files
+
+---
+
+### Full Repository Mode: Index Entire Repository
+
+Parse a repository, generate chunks with embeddings, index to OpenSearch (optional), and build a knowledge graph.
+
+#### Basic Usage
 
 ```bash
 python scripts/standalone_build_repo_independent.py \
@@ -205,7 +331,7 @@ python scripts/standalone_build_repo_independent.py \
   --output-dir ./output
 ```
 
-### Full Command with All Options
+#### Full Command with All Options
 
 ```bash
 python scripts/standalone_build_repo_independent.py \
@@ -221,11 +347,11 @@ python scripts/standalone_build_repo_independent.py \
   --chunk-overlap-size 50
 ```
 
-### Command-Line Arguments
+#### Full Repository Mode Arguments
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `--repo-path` | ✅ Yes | - | Path to the repository to index |
+| `--repo-path` | ✅ Yes (for full repo mode) | - | Path to the repository to index |
 | `--output-dir` | ❌ No | `./output` | Directory to save output files |
 | `--opensearch-host` | ❌ No | - | OpenSearch host (e.g., `localhost:9200`) |
 | `--opensearch-index` | ❌ No | `code_chunks` | OpenSearch index name |
