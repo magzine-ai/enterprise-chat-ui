@@ -2772,6 +2772,8 @@ async def main():
     parser.add_argument("--opensearch-region", default="us-east-1", help="AWS region for OpenSearch (default: us-east-1)")
     parser.add_argument("--opensearch-use-ssl", action="store_true", default=True, help="Use SSL for OpenSearch connection (default: True)")
     parser.add_argument("--opensearch-verify-certs", action="store_true", default=True, help="Verify SSL certificates (default: True)")
+    parser.add_argument("--application-name", help="Application name (if not provided, will be extracted from pom.xml)")
+    parser.add_argument("--seal-id", help="Seal ID (if not provided, will be extracted from pom.xml properties)")
     parser.add_argument("--openai-api-key", help="OpenAI API key for embeddings")
     parser.add_argument("--embedding-model", default="text-embedding-3-small", help="Embedding model")
     parser.add_argument("--use-azure-embeddings", action="store_true", help="Use Azure OpenAI Embeddings service (requires config.ini)")
@@ -2880,6 +2882,19 @@ async def main():
     # Process repository
     chunks = await indexer.process_repository(args.repo_path)
     
+    # Extract application_name and sealId
+    application_name = args.application_name
+    seal_id = args.seal_id
+    
+    # If not provided, extract from pom.xml
+    if not application_name or not seal_id:
+        app_extractor = ApplicationServiceExtractor(args.repo_path)
+        app_data = app_extractor.extract()
+        if not application_name:
+            application_name = app_data.get('application', {}).get('name', '')
+        if not seal_id:
+            seal_id = app_data.get('application', {}).get('seal_id', '')
+    
     # Save chunks to JSON
     chunks_file = output_dir / "chunks.json"
     with open(chunks_file, 'w') as f:
@@ -2895,7 +2910,9 @@ async def main():
             use_aws_auth=args.opensearch_use_aws_auth,
             region=args.opensearch_region,
             use_ssl=args.opensearch_use_ssl,
-            verify_certs=args.opensearch_verify_certs
+            verify_certs=args.opensearch_verify_certs,
+            application_name=application_name,
+            seal_id=seal_id
         )
         await opensearch.index_chunks(chunks)
     
