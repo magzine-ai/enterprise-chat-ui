@@ -55,6 +55,26 @@ except ImportError:
     OPENAI_AVAILABLE = False
     print("⚠️ OpenAI not available. Install: pip install openai (optional, for semantic search)")
 
+# Azure OpenAI for LLM (chat client)
+try:
+    from langchain_openai import AzureChatOpenAI
+    from azure.identity import CertificateCredential
+    from azure.core.exceptions import ClientAuthenticationError
+    AZURE_LLM_AVAILABLE = True
+except ImportError:
+    AZURE_LLM_AVAILABLE = False
+    print("⚠️ Azure LLM not available. Install: pip install langchain-openai azure-identity (optional, for LLM responses)")
+
+# Azure OpenAI for LLM (chat client)
+try:
+    from langchain_openai import AzureChatOpenAI
+    from azure.identity import CertificateCredential
+    from azure.core.exceptions import ClientAuthenticationError
+    AZURE_LLM_AVAILABLE = True
+except ImportError:
+    AZURE_LLM_AVAILABLE = False
+    print("⚠️ Azure LLM not available. Install: pip install langchain-openai azure-identity (optional, for LLM responses)")
+
 
 class StandaloneSearcher:
     """Self-contained OpenSearch searcher with AWS authentication support."""
@@ -369,6 +389,222 @@ class StandaloneGraphLoader:
         return related
 
 
+class TokenManager:
+    """Manages Azure OpenAI access tokens with certificate-based authentication."""
+    
+    def __init__(self, cert_path: Optional[str] = None, config_path: Optional[str] = None):
+        """
+        Initialize token manager.
+        
+        Args:
+            cert_path: Path to certificate file (.pem)
+            config_path: Path to config.ini file
+        """
+        self.cert_path = cert_path
+        self.config_path = config_path
+        self.config = self._load_config(config_path)
+        self.access_token = None
+        self._refresh_token()
+    
+    @staticmethod
+    def _load_config(config_path: Optional[str] = None):
+        """Load configuration from config.ini file."""
+        if config_path is None:
+            current_dir = os.path.dirname(__file__)
+            config_path = os.path.join(current_dir, "config.ini")
+        
+        if not os.path.exists(config_path):
+            return None
+        
+        config = configparser.ConfigParser()
+        config.read(config_path)
+        return config
+    
+    def _refresh_token(self):
+        """Obtain or refresh access token."""
+        if not self.config or 'azure_openai' not in self.config:
+            return None
+        
+        try:
+            # Find certificate file
+            if self.cert_path is None:
+                current_dir = os.path.dirname(__file__)
+                cert_path = os.path.join(current_dir, "..", "..", "discoveryeng.dev.azure.jpmchase.net.pem")
+                
+                if not os.path.exists(cert_path):
+                    alt_paths = [
+                        os.path.join(current_dir, "discoveryeng.dev.azure.jpmchase.net.pem"),
+                        os.path.join(os.path.dirname(current_dir), "discoveryeng.dev.azure.jpmchase.net.pem"),
+                    ]
+                    for alt_path in alt_paths:
+                        if os.path.exists(alt_path):
+                            cert_path = alt_path
+                            break
+                    else:
+                        print("⚠️ Certificate file not found")
+                        return None
+            else:
+                cert_path = self.cert_path
+            
+            credential = CertificateCredential(
+                tenant_id=self.config['azure_openai']['azure_tenant_id'],
+                client_id=self.config['azure_openai']['azure_client_id'],
+                certificate_path=cert_path
+            )
+            
+            self.access_token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+            return self.access_token
+        except Exception as e:
+            print(f"⚠️ Failed to obtain access token: {e}")
+            return None
+    
+    def get_token(self) -> Optional[str]:
+        """Get current access token, refreshing if needed."""
+        if not self.access_token:
+            self._refresh_token()
+        return self.access_token
+
+
+class LLMClient:
+    """Azure OpenAI LLM client with streaming support."""
+    
+    def __init__(
+        self,
+        token_manager: Optional[TokenManager] = None,
+        user_sid: str = "default_user",
+        cert_path: Optional[str] = None,
+        config_path: Optional[str] = None
+    ):
+        """
+        Initialize LLM client.
+        
+        Args:
+            token_manager: TokenManager instance (optional, will create if not provided)
+            user_sid: User session ID for multi-tenancy
+            cert_path: Path to certificate file (optional)
+            config_path: Path to config.ini file (optional)
+        """
+        if not AZURE_LLM_AVAILABLE:
+            self.chat_client = None
+            print("⚠️ Azure LLM not available")
+            return
+        
+        if token_manager is None:
+            token_manager = TokenManager(cert_path=cert_path, config_path=config_path)
+        
+        self.token_manager = token_manager
+        self.user_sid = user_sid
+        self.config = token_manager.config if token_manager else None
+        
+        if not self.config or 'azure_openai' not in self.config:
+            print("⚠️ Azure OpenAI config not found")
+            self.chat_client = None
+            return
+        
+        self._refresh_client()
+    
+    def _refresh_client(self):
+        """Refresh the chat client with latest token."""
+        if not self.token_manager:
+            return
+        
+        access_token = self.token_manager.get_token()
+        if not access_token:
+            print("⚠️ No access token available")
+            self.chat_client = None
+            return
+        
+        try:
+            self.chat_client = AzureChatOpenAI(
+                azure_endpoint=self.config['azure_openai'].get('azure_endpoint', 'https://llm-multitenancy-exp.jpmchase.net/ver2/'),
+                openai_api_version=self.config['azure_openai'].get('openai_api_version', '2024-10-21'),
+                deployment_name=self.config['azure_openai'].get('deployment_name', 'gpt-4'),
+                openai_api_key=self.config['azure_openai'].get('openai_api_key', ''),
+                openai_api_type="azure",
+                max_tokens=int(self.config['azure_openai'].get('max_tokens', '2000')),
+                temperature=float(self.config['azure_openai'].get('temperature', '0.7')),
+                streaming=True,
+                default_headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "user_sid": self.user_sid
+                }
+            )
+            print("✅ LLM client initialized")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize LLM client: {e}")
+            self.chat_client = None
+    
+    def get_chat_client(self):
+        """Get chat client with latest token."""
+        if self.chat_client and self.token_manager:
+            # Ensure the client uses the latest token
+            access_token = self.token_manager.get_token()
+            if access_token:
+                self.chat_client.default_headers["Authorization"] = f"Bearer {access_token}"
+        return self.chat_client
+    
+    def generate_response(
+        self,
+        query: str,
+        context: List[Dict[str, Any]],
+        stream: bool = True
+    ) -> str:
+        """
+        Generate LLM response with context from search results.
+        
+        Args:
+            query: User query
+            context: List of search results to use as context
+            stream: Whether to stream the response (default: True)
+        
+        Returns:
+            Generated response text
+        """
+        if not self.chat_client:
+            return "LLM client not available. Please check configuration."
+        
+        # Build context from search results
+        context_text = "Relevant code snippets from the codebase:\n\n"
+        for i, result in enumerate(context[:5], 1):  # Use top 5 results
+            context_text += f"--- Result {i} ---\n"
+            context_text += f"File: {result.get('file_path', 'unknown')}\n"
+            context_text += f"Type: {result.get('type', 'unknown')}\n"
+            context_text += f"FQN: {result.get('fqn', 'unknown')}\n"
+            context_text += f"Code:\n{result.get('code', '')[:500]}\n\n"  # Limit code length
+        
+        # Build prompt
+        prompt = f"""You are a helpful code assistant. Answer the user's question based on the provided code context.
+
+Context:
+{context_text}
+
+User Question: {query}
+
+Please provide a clear and concise answer based on the code context provided. If the context doesn't contain enough information, say so."""
+        
+        try:
+            # Get client with latest token
+            client = self.get_chat_client()
+            if not client:
+                return "Failed to get LLM client"
+            
+            if stream:
+                # Streaming response
+                response_parts = []
+                for chunk in client.stream(prompt):
+                    if hasattr(chunk, 'content') and chunk.content:
+                        response_parts.append(chunk.content)
+                        print(chunk.content, end='', flush=True)
+                print()  # New line after streaming
+                return ''.join(response_parts)
+            else:
+                # Non-streaming response
+                response = client.invoke(prompt)
+                return response.content if hasattr(response, 'content') else str(response)
+        except Exception as e:
+            return f"Error generating response: {str(e)}"
+
+
 def mermaid_from_graph(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> str:
     """Generate Mermaid diagram from nodes and edges."""
     if not nodes:
@@ -392,7 +628,7 @@ def mermaid_from_graph(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]])
     return f"flowchart LR\n{body}"
 
 
-def build_html(query: str, results: List[Dict[str, Any]], mermaid_snippet: str) -> str:
+def build_html(query: str, results: List[Dict[str, Any]], mermaid_snippet: str, llm_response: Optional[str] = None) -> str:
     """Build HTML report."""
     rows = []
     for r in results:
@@ -441,6 +677,13 @@ def build_html(query: str, results: List[Dict[str, Any]], mermaid_snippet: str) 
   <div class="mermaid">
 {mermaid_snippet}
   </div>
+  
+  {f'''
+  <h2>LLM Response</h2>
+  <div style="background: #f9f9f9; padding: 16px; border-radius: 6px; margin-top: 16px; white-space: pre-wrap;">
+{html.escape(llm_response or "No LLM response generated")}
+  </div>
+  ''' if llm_response else ''}
 </body>
 </html>"""
 
@@ -465,6 +708,13 @@ def main():
     parser.add_argument("--output", required=True, help="Output HTML file")
     parser.add_argument("--max-results", type=int, default=10, help="Max search results")
     parser.add_argument("--graph-depth", type=int, default=2, help="Graph traversal depth")
+    
+    # LLM arguments
+    parser.add_argument("--use-llm", action="store_true", help="Generate LLM response with context from search results")
+    parser.add_argument("--llm-config", help="Path to config.ini file for LLM configuration (default: script directory)")
+    parser.add_argument("--llm-cert-path", help="Path to Azure certificate file (.pem)")
+    parser.add_argument("--user-sid", default="default_user", help="User session ID for LLM (default: default_user)")
+    parser.add_argument("--no-stream", action="store_true", help="Disable streaming for LLM response")
     args = parser.parse_args()
     
     # Validate arguments
@@ -495,6 +745,31 @@ def main():
         seal_id=args.seal_id
     )
     print(f"✅ Found {len(results)} results")
+    
+    # Generate LLM response if requested
+    llm_response = None
+    if args.use_llm:
+        if not AZURE_LLM_AVAILABLE:
+            print("⚠️ Azure LLM not available, skipping LLM response")
+        else:
+            print("\n🤖 Generating LLM response with context...")
+            try:
+                llm_client = LLMClient(
+                    token_manager=None,
+                    user_sid=args.user_sid,
+                    cert_path=args.llm_cert_path,
+                    config_path=args.llm_config
+                )
+                llm_response = llm_client.generate_response(
+                    query=args.query,
+                    context=results,
+                    stream=not args.no_stream
+                )
+                print("✅ LLM response generated")
+            except Exception as e:
+                print(f"⚠️ Failed to generate LLM response: {e}")
+                import traceback
+                print(traceback.format_exc())
     
     # Build graph visualization
     nodes = []
@@ -539,7 +814,7 @@ def main():
     
     # Generate HTML
     mermaid_snippet = mermaid_from_graph(nodes, edges)
-    html_content = build_html(args.query, results, mermaid_snippet)
+    html_content = build_html(args.query, results, mermaid_snippet, llm_response)
     
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
