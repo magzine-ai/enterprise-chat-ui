@@ -2064,15 +2064,14 @@ class StandaloneGraphBuilder:
                                 self.graph.add_edge(method_id, target_method_id, relationship='CALLS')
         
         # Method USES_RESOURCE ExternalResource
-        if external_resources and parsed_files:
-            for resource in external_resources:
-                resource_id = f"resource_{hashlib.sha256(resource.get('name', '').encode()).hexdigest()[:16]}"
-                source_file = resource.get('source', '')
-                
-                # Find methods in the source file
-                for method_key, method_id in method_nodes.items():
-                    if method_key.startswith(source_file + "::"):
-                        self.graph.add_edge(method_id, resource_id, relationship='USES_RESOURCE')
+        # External resource extraction disabled - relationships can be added manually later
+        # if external_resources and parsed_files:
+        #     for resource in external_resources:
+        #         resource_id = f"resource_{hashlib.sha256(resource.get('name', '').encode()).hexdigest()[:16]}"
+        #         source_file = resource.get('source', '')
+        #         for method_key, method_id in method_nodes.items():
+        #             if method_key.startswith(source_file + "::"):
+        #                 self.graph.add_edge(method_id, resource_id, relationship='USES_RESOURCE')
         
         # ConfigArtifact DEFINES_KEY ConfigKey
         if config_data:
