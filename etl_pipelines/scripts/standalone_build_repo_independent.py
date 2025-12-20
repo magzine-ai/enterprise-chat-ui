@@ -2895,6 +2895,46 @@ async def main():
     if not args.repo_path:
         raise SystemExit("❌ Either --file (single file mode), --repo-path (full repository mode), or --port-graph-file (port mode) is required.")
     
+    # Check OpenSearch connectivity at the start (if configured)
+    opensearch = None
+    if args.opensearch_host or args.opensearch_config:
+        print("\n🔍 Initializing OpenSearch connection...")
+        # Extract application_name and sealId early for OpenSearch initialization
+        application_name = args.application_name
+        seal_id = args.seal_id
+        
+        # If not provided, try to extract from pom.xml
+        if not application_name or not seal_id:
+            try:
+                app_extractor = ApplicationServiceExtractor(args.repo_path)
+                app_data = app_extractor.extract()
+                if not application_name:
+                    application_name = app_data.get('application', {}).get('name', '')
+                if not seal_id:
+                    seal_id = app_data.get('application', {}).get('seal_id', '')
+            except Exception as e:
+                print(f"⚠️ Could not extract application info from pom.xml: {e}")
+        
+        opensearch = StandaloneOpenSearch(
+            host=args.opensearch_host,
+            index=args.opensearch_index,
+            config_path=args.opensearch_config,
+            use_aws_auth=args.opensearch_use_aws_auth,
+            region=args.opensearch_region,
+            use_ssl=args.opensearch_use_ssl,
+            verify_certs=args.opensearch_verify_certs,
+            application_name=application_name,
+            seal_id=seal_id
+        )
+        
+        # Check connectivity and list indexes before proceeding
+        connectivity_ok = await opensearch.check_connectivity_and_list_indexes()
+        if not connectivity_ok:
+            print("❌ OpenSearch connectivity check failed. Exiting.")
+            raise SystemExit("Failed to connect to OpenSearch. Please check your configuration.")
+        
+        print()  # Empty line for readability
+    
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
