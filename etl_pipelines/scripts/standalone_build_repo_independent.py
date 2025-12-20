@@ -2964,18 +2964,19 @@ async def main():
     # Process repository
     chunks = await indexer.process_repository(args.repo_path)
     
-    # Extract application_name and sealId
-    application_name = args.application_name
-    seal_id = args.seal_id
-    
-    # If not provided, extract from pom.xml
-    if not application_name or not seal_id:
-        app_extractor = ApplicationServiceExtractor(args.repo_path)
-        app_data = app_extractor.extract()
-        if not application_name:
-            application_name = app_data.get('application', {}).get('name', '')
-        if not seal_id:
-            seal_id = app_data.get('application', {}).get('seal_id', '')
+    # Extract application_name and sealId (if not already extracted during OpenSearch init)
+    if not opensearch:
+        application_name = args.application_name
+        seal_id = args.seal_id
+        
+        # If not provided, extract from pom.xml
+        if not application_name or not seal_id:
+            app_extractor = ApplicationServiceExtractor(args.repo_path)
+            app_data = app_extractor.extract()
+            if not application_name:
+                application_name = app_data.get('application', {}).get('name', '')
+            if not seal_id:
+                seal_id = app_data.get('application', {}).get('seal_id', '')
     
     # Save chunks to JSON
     chunks_file = output_dir / "chunks.json"
@@ -2983,8 +2984,8 @@ async def main():
         json.dump(chunks, f, indent=2)
     print(f"✅ Saved chunks to {chunks_file}")
     
-    # Index to OpenSearch if configured
-    if args.opensearch_host or args.opensearch_config:
+    # Index to OpenSearch if configured (opensearch instance already created and checked)
+    if opensearch:
         print("\n🔍 Initializing OpenSearch connection...")
         opensearch = StandaloneOpenSearch(
             host=args.opensearch_host,
