@@ -1206,8 +1206,12 @@ class StandaloneOpenSearch:
             region: AWS region (optional, will use config or default)
             use_ssl: Use SSL for connection (default: True)
             verify_certs: Verify SSL certificates (default: True)
+            application_name: Application name (optional, will be extracted from pom.xml if not provided)
+            seal_id: Seal ID (optional, will be extracted from pom.xml if not provided)
         """
         self.client = None
+        self.application_name = application_name
+        self.seal_id = seal_id
         
         # Load config
         if config_path is None:
