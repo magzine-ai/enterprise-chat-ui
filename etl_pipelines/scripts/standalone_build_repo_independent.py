@@ -27,6 +27,7 @@ import os
 import re
 import json
 import pickle
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
@@ -49,6 +50,17 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
     print("⚠️ OpenAI not available. Install: pip install openai")
+
+# Azure OpenAI Embeddings Service
+try:
+    from azure.identity import CertificateCredential
+    from azure.core.exceptions import ClientAuthenticationError
+    from langchain_openai import AzureOpenAIEmbeddings
+    import configparser
+    AZURE_EMBEDDINGS_AVAILABLE = True
+except ImportError:
+    AZURE_EMBEDDINGS_AVAILABLE = False
+    print("⚠️ Azure embeddings not available. Install: pip install azure-identity langchain-openai")
 
 # OpenSearch
 try:
@@ -129,6 +141,118 @@ else:
         
         def dict(self):
             return self.__dict__
+
+
+class EmbeddingService:
+    """Azure OpenAI Embedding Service with certificate-based authentication."""
+    
+    def __init__(self, user_sid: str = "default_user", cert_path: Optional[str] = None, config_path: Optional[str] = None):
+        """
+        Initialize the embedding service.
+        
+        Args:
+            user_sid: User session ID for multi-tenancy
+            cert_path: Path to certificate file (optional, will try default locations)
+            config_path: Path to config.ini file (optional, defaults to script directory)
+        """
+        self.config = self.load_config(config_path)
+        self.user_sid = user_sid
+        self.access_token = self.get_access_token(cert_path, config_path)
+        if self.access_token:
+            print(f"✅ EmbeddingService access token obtained")
+        self.embeddings = self.create_embeddings_client()
+    
+    @staticmethod
+    def load_config(config_path: Optional[str] = None):
+        """Load configuration from config.ini file."""
+        if config_path is None:
+            current_dir = os.path.dirname(__file__)
+            file_path = os.path.join(current_dir, 'config.ini')
+        else:
+            file_path = config_path
+        
+        print(f"Loading config from {file_path}")
+        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Config file not found: {file_path}")
+        
+        llm_config = configparser.ConfigParser()
+        llm_config.read(file_path)
+        return llm_config
+    
+    @staticmethod
+    def get_access_token(cert_path: Optional[str] = None, config_path: Optional[str] = None):
+        """Obtain access token using certificate-based authentication."""
+        print("Obtaining access token.")
+        config = EmbeddingService.load_config(config_path)
+        current_dir = os.path.dirname(__file__)
+        
+        try:
+            # Certificate path - use provided path or default location
+            if cert_path is None:
+                cert_path = os.path.join(current_dir, "..", "..", "discoveryeng.dev.azure.jpmchase.net.pem")
+            
+            # Try to find certificate if default path doesn't exist
+            if not os.path.exists(cert_path):
+                # Try alternative locations
+                alt_paths = [
+                    os.path.join(current_dir, "discoveryeng.dev.azure.jpmchase.net.pem"),
+                    os.path.join(os.path.dirname(current_dir), "discoveryeng.dev.azure.jpmchase.net.pem"),
+                ]
+                for alt_path in alt_paths:
+                    if os.path.exists(alt_path):
+                        cert_path = alt_path
+                        break
+                else:
+                    raise FileNotFoundError(f"Certificate file not found: {cert_path}")
+            
+            print(f"Certificate path: {cert_path}")
+            
+            credential = CertificateCredential(
+                tenant_id=config['azure_openai']['azure_tenant_id'],
+                client_id=config['azure_openai']['azure_client_id'],
+                certificate_path=cert_path
+            )
+            
+            access_token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+            return access_token
+        except ClientAuthenticationError as e:
+            error_msg = str(e) if hasattr(e, '__str__') else getattr(e, 'message', 'Unknown error')
+            print(f"Authentication failed: {error_msg}")
+            return None
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            return None
+    
+    def create_embeddings_client(self):
+        """Create Azure OpenAI Embeddings client."""
+        if not self.access_token:
+            raise Exception("No access token available for Azure OpenAI Embeddings.")
+        
+        return AzureOpenAIEmbeddings(
+            azure_endpoint="https://llm-multitenancy-exp.jpmchase.net/ver2/",
+            openai_api_version="2024-10-21",
+            openai_api_key="b3d265714de0417cbd8af5c26b6013b1",
+            openai_api_type="azure",
+            default_headers={
+                "Authorization": f"Bearer {self.access_token}",
+                "user_sid": self.user_sid
+            }
+        )
+    
+    @staticmethod
+    def chunk_list(data, chunk_size):
+        """Split a list into chunks of specified size."""
+        for i in range(0, len(data), chunk_size):
+            yield data[i:i + chunk_size]
+    
+    def embed_text(self, text: str) -> List[float]:
+        """Embed a single string using AzureOpenAIEmbeddings."""
+        return self.embeddings.embed_query(text)
+    
+    def embed_texts(self, texts: list) -> List[List[float]]:
+        """Embed a list of strings using AzureOpenAIEmbeddings."""
+        return self.embeddings.embed_documents(texts)
 
 
 class StandaloneParser:
@@ -290,10 +414,15 @@ class StandaloneIndexer:
         chunk_overlap_size: int = 50,
         batch_size: int = 100,
         n_jobs: int = -1,
-        checkpoint_file: Optional[str] = None
+        checkpoint_file: Optional[str] = None,
+        use_azure_embeddings: bool = False,
+        user_sid: str = "default_user",
+        azure_cert_path: Optional[str] = None,
+        azure_config_path: Optional[str] = None
     ):
         self.parser = StandaloneParser()
         self.embedding_client = None
+        self.azure_embedding_service = None
         self.embedding_model = embedding_model
         self.chunking_strategy = chunking_strategy
         self.max_chunk_size = max_chunk_size
@@ -302,9 +431,25 @@ class StandaloneIndexer:
         self.batch_size = batch_size
         self.n_jobs = n_jobs  # -1 means use all CPUs
         self.checkpoint_file = checkpoint_file
+        self.use_azure_embeddings = use_azure_embeddings
         
-        if OPENAI_AVAILABLE and openai_api_key:
+        # Initialize embedding service (Azure or OpenAI)
+        if use_azure_embeddings and AZURE_EMBEDDINGS_AVAILABLE:
+            try:
+                self.azure_embedding_service = EmbeddingService(
+                    user_sid=user_sid,
+                    cert_path=azure_cert_path,
+                    config_path=azure_config_path
+                )
+                print("✅ Using Azure OpenAI Embeddings service")
+            except Exception as e:
+                print(f"⚠️ Failed to initialize Azure Embeddings service: {e}")
+                print("   Falling back to OpenAI if API key provided")
+                use_azure_embeddings = False
+        
+        if not use_azure_embeddings and OPENAI_AVAILABLE and openai_api_key:
             self.embedding_client = AsyncOpenAI(api_key=openai_api_key)
+            print("✅ Using OpenAI Embeddings service")
     
     async def generate_embedding(self, text: str) -> Optional[List[float]]:
         """Generate embedding for a single text."""
@@ -323,7 +468,32 @@ class StandaloneIndexer:
     
     async def generate_embeddings_batch(self, texts: List[str]) -> List[Optional[List[float]]]:
         """Generate embeddings for a batch of texts (more efficient)."""
-        if not self.embedding_client or not texts:
+        if not texts:
+            return [None] * len(texts)
+        
+        # Use Azure Embeddings if available
+        if self.use_azure_embeddings and self.azure_embedding_service:
+            try:
+                # Azure embeddings service is synchronous, run in executor to avoid blocking
+                import asyncio
+                loop = asyncio.get_event_loop()
+                # Process in batches to avoid memory issues
+                all_embeddings = []
+                for batch in self.azure_embedding_service.chunk_list(texts, self.batch_size):
+                    # Run synchronous embedding in executor
+                    batch_embeddings = await loop.run_in_executor(
+                        None, 
+                        self.azure_embedding_service.embed_texts, 
+                        batch
+                    )
+                    all_embeddings.extend(batch_embeddings)
+                return all_embeddings
+            except Exception as e:
+                print(f"⚠️ Error generating Azure embeddings: {e}")
+                return [None] * len(texts)
+        
+        # Fallback to OpenAI
+        if not self.embedding_client:
             return [None] * len(texts)
         
         all_embeddings = []
@@ -344,6 +514,19 @@ class StandaloneIndexer:
                 all_embeddings.extend([None] * len(batch))
         
         return all_embeddings
+    
+    def _generate_chunk_id(self, chunk: Dict[str, Any]) -> str:
+        """
+        Generate a unique, deterministic chunk_id based on chunk attributes.
+        Same chunk will always get the same ID.
+        """
+        # Create a unique identifier from chunk attributes
+        unique_string = f"{chunk['file_path']}:{chunk['start_line']}:{chunk['end_line']}:{chunk['type']}:{chunk['fqn']}"
+        
+        # Generate hash for consistent, short ID
+        chunk_id = hashlib.sha256(unique_string.encode()).hexdigest()[:16]  # 16-char hex ID
+        
+        return f"chunk_{chunk_id}"
     
     def find_code_files(self, repo_path: str) -> List[str]:
         """Find all code files in repository."""
@@ -468,8 +651,9 @@ class StandaloneIndexer:
             all_chunks = validated_chunks
         
         # Generate embeddings in batches
-        if self.embedding_client:
-            print(f"📊 Generating embeddings for {len(all_chunks)} chunks...")
+        if self.embedding_client or self.azure_embedding_service:
+            embedding_service_name = "Azure" if self.azure_embedding_service else "OpenAI"
+            print(f"📊 Generating embeddings for {len(all_chunks)} chunks using {embedding_service_name}...")
             texts = [chunk.get('code') or chunk.get('summary', '') for chunk in all_chunks]
             embeddings = await self.generate_embeddings_batch(texts)
             
@@ -636,13 +820,15 @@ class StandaloneIndexer:
                 'summary': f"File {Path(file_path).name}",
                 'language': parsed.get('language', 'unknown'),
             }
+            # Generate unique chunk_id
+            chunk['chunk_id'] = self._generate_chunk_id(chunk)
             chunks.append(chunk)
         
         return chunks
     
     def _create_method_chunk(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> Dict[str, Any]:
         """Create a method chunk."""
-        return {
+        chunk = {
             'type': 'method',
             'fqn': f"{Path(file_path).stem}.{func['name']}",
             'file_path': file_path,
@@ -652,6 +838,9 @@ class StandaloneIndexer:
             'summary': f"Method {func['name']}",
             'language': parsed.get('language', 'unknown'),
         }
+        # Generate unique chunk_id
+        chunk['chunk_id'] = self._generate_chunk_id(chunk)
+        return chunk
     
     def _create_class_metadata_chunk(self, cls: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> Dict[str, Any]:
         """
@@ -727,7 +916,7 @@ class StandaloneIndexer:
         code_lines = class_metadata_code.split('\n')
         end_line = start_line + len(code_lines) - 1
         
-        return {
+        chunk = {
             'type': 'class',
             'fqn': f"{Path(file_path).stem}.{cls['name']}",
             'file_path': file_path,
@@ -737,6 +926,9 @@ class StandaloneIndexer:
             'summary': f"Class {cls['name']}",
             'language': parsed.get('language', 'unknown'),
         }
+        # Generate unique chunk_id
+        chunk['chunk_id'] = self._generate_chunk_id(chunk)
+        return chunk
     
     def _split_large_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str) -> List[Dict[str, Any]]:
         """Split large code into smaller chunks."""
@@ -750,7 +942,7 @@ class StandaloneIndexer:
             chunk_start = entity.get('start_line', 1) + i
             chunk_end = entity.get('start_line', 1) + i + len(chunk_lines) - 1
             
-            chunks.append({
+            chunk = {
                 'type': entity_type,
                 'fqn': f"{Path(file_path).stem}.{entity['name']}_part{i // lines_per_chunk}",
                 'file_path': file_path,
@@ -759,14 +951,17 @@ class StandaloneIndexer:
                 'code': chunk_code,
                 'summary': f"{entity_type.title()} {entity['name']} (part {i // lines_per_chunk + 1})",
                 'language': 'unknown',
-            })
+            }
+            # Generate unique chunk_id
+            chunk['chunk_id'] = self._generate_chunk_id(chunk)
+            chunks.append(chunk)
         
         return chunks
     
     def _recursive_split_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str) -> List[Dict[str, Any]]:
         """Recursively split code by logical blocks."""
         if len(code) <= self.max_chunk_size:
-            return [{
+            chunk = {
                 'type': entity_type,
                 'fqn': f"{Path(file_path).stem}.{entity['name']}",
                 'file_path': file_path,
@@ -775,7 +970,10 @@ class StandaloneIndexer:
                 'code': code,
                 'summary': f"{entity_type.title()} {entity['name']}",
                 'language': 'unknown',
-            }]
+            }
+            # Generate unique chunk_id
+            chunk['chunk_id'] = self._generate_chunk_id(chunk)
+            return [chunk]
         
         # Try to split by logical blocks
         blocks = self._extract_logical_blocks(code)
@@ -838,7 +1036,7 @@ class StandaloneIndexer:
             window_start = entity.get('start_line', 1) + i
             window_end = entity.get('start_line', 1) + i + len(window_lines) - 1
             
-            chunks.append({
+            chunk = {
                 'type': 'class',
                 'fqn': f"{Path(file_path).stem}.{entity['name']}_window{i // (window_size - overlap_lines)}",
                 'file_path': file_path,
@@ -847,7 +1045,10 @@ class StandaloneIndexer:
                 'code': window_code,
                 'summary': f"Class {entity['name']} (window {i // (window_size - overlap_lines) + 1})",
                 'language': 'unknown',
-            })
+            }
+            # Generate unique chunk_id
+            chunk['chunk_id'] = self._generate_chunk_id(chunk)
+            chunks.append(chunk)
         
         return chunks
 
@@ -917,24 +1118,25 @@ class StandaloneOpenSearch:
         
         await self.ensure_index()
         
-        for i, chunk in enumerate(chunks):
-            if 'embedding' not in chunk:
+        for chunk in chunks:
+            if 'embedding' not in chunk or 'chunk_id' not in chunk:
                 continue
             
             doc = {
-                'chunk_id': i,
+                'chunk_id': chunk['chunk_id'],  # Use the chunk's unique ID
                 'type': chunk['type'],
                 'fqn': chunk['fqn'],
                 'file_path': chunk['file_path'],
                 'code': chunk['code'],
-                'summary': chunk['summary'],
+                'summary': chunk.get('summary', ''),
                 'embedding': chunk['embedding'],
             }
             
             try:
-                self.client.index(index=self.index, id=i, body=doc)
+                # Use chunk_id as the document ID for easy retrieval
+                self.client.index(index=self.index, id=chunk['chunk_id'], body=doc)
             except Exception as e:
-                print(f"⚠️ Error indexing chunk {i}: {e}")
+                print(f"⚠️ Error indexing chunk {chunk.get('chunk_id', 'unknown')}: {e}")
         
         print(f"✅ Indexed {len(chunks)} chunks to OpenSearch")
 
@@ -954,27 +1156,33 @@ class StandaloneGraphBuilder:
             print("⚠️ NetworkX not available")
             return
         
-        # Add nodes
-        for i, chunk in enumerate(chunks):
-            node_id = f"chunk_{i}"
+        # Add nodes using chunk_id
+        for chunk in chunks:
+            if 'chunk_id' not in chunk:
+                continue
+            
             self.graph.add_node(
-                node_id,
+                chunk['chunk_id'],  # Use chunk_id as node ID
                 type=chunk['type'],
                 fqn=chunk['fqn'],
                 file_path=chunk['file_path'],
+                start_line=chunk.get('start_line', 1),
+                end_line=chunk.get('end_line', 1),
             )
         
-        # Add edges based on file relationships (simplified)
-        for i, chunk1 in enumerate(chunks):
-            for j, chunk2 in enumerate(chunks):
-                if i == j:
+        # Add edges based on file relationships
+        for chunk1 in chunks:
+            if 'chunk_id' not in chunk1:
+                continue
+            for chunk2 in chunks:
+                if 'chunk_id' not in chunk2 or chunk1['chunk_id'] == chunk2['chunk_id']:
                     continue
                 
                 # Same file = related
                 if chunk1['file_path'] == chunk2['file_path']:
                     self.graph.add_edge(
-                        f"chunk_{i}",
-                        f"chunk_{j}",
+                        chunk1['chunk_id'],  # Use chunk_id
+                        chunk2['chunk_id'],  # Use chunk_id
                         relationship='in_file'
                     )
         
@@ -1124,6 +1332,10 @@ async def main():
     parser.add_argument("--opensearch-index", default="code_chunks", help="OpenSearch index name")
     parser.add_argument("--openai-api-key", help="OpenAI API key for embeddings")
     parser.add_argument("--embedding-model", default="text-embedding-3-small", help="Embedding model")
+    parser.add_argument("--use-azure-embeddings", action="store_true", help="Use Azure OpenAI Embeddings service (requires config.ini)")
+    parser.add_argument("--user-sid", default="default_user", help="User session ID for Azure embeddings (default: default_user)")
+    parser.add_argument("--azure-cert-path", help="Path to Azure certificate file (.pem)")
+    parser.add_argument("--azure-config-path", help="Path to config.ini file (default: script directory)")
     
     # Common arguments
     parser.add_argument(
@@ -1179,7 +1391,11 @@ async def main():
         chunk_overlap_size=args.chunk_overlap_size,
         batch_size=args.batch_size,
         n_jobs=args.n_jobs,
-        checkpoint_file=checkpoint_file
+        checkpoint_file=checkpoint_file,
+        use_azure_embeddings=args.use_azure_embeddings,
+        user_sid=args.user_sid,
+        azure_cert_path=args.azure_cert_path,
+        azure_config_path=args.azure_config_path
     )
     
     # Process repository

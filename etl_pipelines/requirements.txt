@@ -21,6 +21,10 @@ networkx>=3.0
 # OpenAI for generating embeddings (optional - only if you want embeddings)
 openai>=2.0.0
 
+# Azure OpenAI Embeddings (optional - alternative to OpenAI)
+# azure-identity>=1.15.0  # For certificate-based authentication
+# langchain-openai>=0.1.0  # For AzureOpenAIEmbeddings
+
 # OpenSearch client (optional - only if you want to index/query OpenSearch)
 opensearch-py==2.4.0
 
