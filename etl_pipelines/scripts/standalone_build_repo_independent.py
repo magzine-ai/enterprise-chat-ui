@@ -2749,8 +2749,8 @@ class TigerGraphPort:
             except Exception as e:
                 print(f"⚠️ Error loading chunks file: {e}")
         
-        # Port to TigerDB
-        return self.port_from_networkx(nx_graph, chunks)
+        # Port to TigerDB (use rich schema by default)
+        return self.port_from_networkx(nx_graph, chunks, use_rich_schema=True)
 
 
 async def generate_chunks_for_file(
