@@ -125,6 +125,17 @@ python standalone_build_repo_independent.py \
 - `--n-jobs` - Number of parallel jobs for file processing (-1 = all CPUs, default: `-1`)
 - `--checkpoint-file` - Checkpoint file path for resuming (optional)
 - `--resume` - Resume from checkpoint if available
+- `--use-azure-embeddings` - Use Azure OpenAI Embeddings service (requires config.ini)
+- `--user-sid` - User session ID for Azure embeddings (default: `default_user`)
+- `--azure-cert-path` - Path to Azure certificate file (.pem)
+- `--azure-config-path` - Path to config.ini file (default: script directory)
+- `--tigergraph-host` - TigerGraph host (e.g., `https://your-instance.i.tgcloud.io`)
+- `--tigergraph-graphname` - TigerGraph graph name (default: `code_knowledge_graph`)
+- `--tigergraph-username` - TigerGraph username (default: `tigergraph`)
+- `--tigergraph-password` - TigerGraph password
+- `--tigergraph-secret` - TigerGraph secret (for cloud instances)
+- `--port-to-tigergraph` - Port NetworkX graph to TigerDB after building
+- `--port-graph-file` - Port existing NetworkX graph file to TigerDB (standalone operation)
 
 ### 2. Query to HTML Report
 

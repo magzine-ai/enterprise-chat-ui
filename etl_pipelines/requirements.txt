@@ -25,6 +25,9 @@ openai>=2.0.0
 # azure-identity>=1.15.0  # For certificate-based authentication
 # langchain-openai>=0.1.0  # For AzureOpenAIEmbeddings
 
+# TigerGraph/TigerDB (optional - for graph database)
+# pyTigerGraph>=1.2.0  # For porting NetworkX graphs to TigerDB
+
 # OpenSearch client (optional - only if you want to index/query OpenSearch)
 opensearch-py==2.4.0
 

@@ -78,6 +78,14 @@ except ImportError:
     NETWORKX_AVAILABLE = False
     print("⚠️ NetworkX not available. Install: pip install networkx")
 
+# TigerGraph for graph database (optional)
+try:
+    from pyTigerGraph import TigerGraphConnection
+    TIGERGRAPH_AVAILABLE = True
+except ImportError:
+    TIGERGRAPH_AVAILABLE = False
+    print("⚠️ TigerGraph not available. Install: pip install pyTigerGraph (optional)")
+
 # Advanced ETL features
 try:
     from tqdm import tqdm
@@ -1168,6 +1176,7 @@ class StandaloneGraphBuilder:
                 file_path=chunk['file_path'],
                 start_line=chunk.get('start_line', 1),
                 end_line=chunk.get('end_line', 1),
+                language=chunk.get('language', 'unknown'),
             )
         
         # Add edges based on file relationships
@@ -1206,6 +1215,230 @@ class StandaloneGraphBuilder:
             'nodes': self.graph.number_of_nodes(),
             'edges': self.graph.number_of_edges()
         }
+    
+    def load_graph(self, graph_path: str) -> bool:
+        """Load graph from pickle file."""
+        if not NETWORKX_AVAILABLE:
+            print("⚠️ NetworkX not available")
+            return False
+        
+        try:
+            with open(graph_path, 'rb') as f:
+                self.graph = pickle.load(f)
+            print(f"✅ Graph loaded from {graph_path}")
+            print(f"   Nodes: {self.graph.number_of_nodes()}, Edges: {self.graph.number_of_edges()}")
+            return True
+        except Exception as e:
+            print(f"⚠️ Error loading graph: {e}")
+            return False
+
+
+class TigerGraphPort:
+    """Port NetworkX graph to TigerDB."""
+    
+    def __init__(
+        self,
+        host: str,
+        graphname: str,
+        username: str = "tigergraph",
+        password: Optional[str] = None,
+        secret: Optional[str] = None,
+        use_ssl: bool = True
+    ):
+        """
+        Initialize TigerGraph connection.
+        
+        Args:
+            host: TigerGraph host (e.g., "https://your-instance.i.tgcloud.io")
+            graphname: Graph name in TigerDB
+            username: TigerGraph username
+            password: TigerGraph password
+            secret: TigerGraph secret (for cloud instances)
+            use_ssl: Use SSL for connection
+        """
+        self.host = host
+        self.graphname = graphname
+        self.username = username
+        self.password = password
+        self.secret = secret
+        self.use_ssl = use_ssl
+        self.conn = None
+        
+        if TIGERGRAPH_AVAILABLE:
+            try:
+                self.conn = TigerGraphConnection(
+                    host=host,
+                    graphname=graphname,
+                    username=username,
+                    password=password,
+                    secret=secret,
+                    useSSL=use_ssl
+                )
+                print(f"✅ Connected to TigerGraph: {host}/{graphname}")
+            except Exception as e:
+                print(f"⚠️ Failed to connect to TigerGraph: {e}")
+        else:
+            print("⚠️ TigerGraph not available. Install: pip install pyTigerGraph")
+    
+    def ensure_schema(self):
+        """Ensure TigerGraph schema exists (create if not)."""
+        if not self.conn:
+            return False
+        
+        try:
+            # Check if graph exists
+            graphs = self.conn.getGraphs()
+            if self.graphname in graphs:
+                print(f"✅ Graph '{self.graphname}' exists in TigerDB")
+                return True
+            
+            # Create schema if it doesn't exist
+            print(f"📝 Creating graph schema '{self.graphname}'...")
+            
+            # Create vertex type
+            self.conn.gsql(f"""
+                CREATE VERTEX CodeChunk (
+                    PRIMARY_ID chunk_id STRING,
+                    fqn STRING,
+                    type STRING,
+                    file_path STRING,
+                    start_line INT,
+                    end_line INT,
+                    code TEXT,
+                    summary STRING,
+                    language STRING
+                )
+            """)
+            
+            # Create edge types
+            self.conn.gsql(f"""
+                CREATE DIRECTED EDGE IN_FILE (
+                    FROM CodeChunk,
+                    TO CodeChunk,
+                    relationship STRING
+                )
+            """)
+            
+            # Create graph
+            self.conn.gsql(f"""
+                CREATE GRAPH {self.graphname} (
+                    CodeChunk,
+                    IN_FILE
+                )
+            """)
+            
+            print(f"✅ Created graph schema '{self.graphname}'")
+            return True
+        except Exception as e:
+            print(f"⚠️ Error ensuring schema: {e}")
+            return False
+    
+    def port_from_networkx(self, nx_graph, chunks: Optional[List[Dict[str, Any]]] = None):
+        """
+        Port NetworkX graph to TigerDB.
+        
+        Args:
+            nx_graph: NetworkX graph object
+            chunks: Optional list of chunks for additional metadata
+        """
+        if not self.conn:
+            print("⚠️ TigerGraph connection not available")
+            return False
+        
+        if not self.ensure_schema():
+            return False
+        
+        try:
+            # Prepare vertices (nodes)
+            vertices = []
+            for node_id, node_data in nx_graph.nodes(data=True):
+                vertex = {
+                    "chunk_id": node_id,
+                    "fqn": node_data.get('fqn', ''),
+                    "type": node_data.get('type', ''),
+                    "file_path": node_data.get('file_path', ''),
+                    "start_line": node_data.get('start_line', 1),
+                    "end_line": node_data.get('end_line', 1),
+                    "code": "",  # Don't store full code in TigerDB
+                    "summary": "",  # Can be added from chunks if provided
+                    "language": node_data.get('language', 'unknown')
+                }
+                
+                # Add summary from chunks if available
+                if chunks:
+                    for chunk in chunks:
+                        if chunk.get('chunk_id') == node_id:
+                            vertex['summary'] = chunk.get('summary', '')
+                            break
+                
+                vertices.append(vertex)
+            
+            # Prepare edges
+            edges = []
+            for source, target, edge_data in nx_graph.edges(data=True):
+                edge = {
+                    "source": source,
+                    "target": target,
+                    "relationship": edge_data.get('relationship', 'in_file')
+                }
+                edges.append(edge)
+            
+            # Upload vertices
+            print(f"📤 Uploading {len(vertices)} vertices to TigerDB...")
+            self.conn.upsertVertex("CodeChunk", vertices)
+            print(f"✅ Uploaded {len(vertices)} vertices")
+            
+            # Upload edges
+            print(f"📤 Uploading {len(edges)} edges to TigerDB...")
+            for edge in edges:
+                self.conn.upsertEdge(
+                    "CodeChunk", edge['source'], "IN_FILE",
+                    "CodeChunk", edge['target'],
+                    {"relationship": edge['relationship']}
+                )
+            print(f"✅ Uploaded {len(edges)} edges")
+            
+            print(f"✅ Successfully ported graph to TigerDB: {len(vertices)} nodes, {len(edges)} edges")
+            return True
+        except Exception as e:
+            print(f"⚠️ Error porting graph to TigerDB: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return False
+    
+    def port_from_file(self, graph_file: str, chunks_file: Optional[str] = None):
+        """
+        Load NetworkX graph from file and port to TigerDB.
+        
+        Args:
+            graph_file: Path to NetworkX pickle file
+            chunks_file: Optional path to chunks JSON file for metadata
+        """
+        if not NETWORKX_AVAILABLE:
+            print("⚠️ NetworkX not available")
+            return False
+        
+        # Load graph
+        try:
+            with open(graph_file, 'rb') as f:
+                nx_graph = pickle.load(f)
+            print(f"✅ Loaded graph from {graph_file}")
+        except Exception as e:
+            print(f"⚠️ Error loading graph file: {e}")
+            return False
+        
+        # Load chunks if provided
+        chunks = None
+        if chunks_file and Path(chunks_file).exists():
+            try:
+                with open(chunks_file, 'r') as f:
+                    chunks = json.load(f)
+                print(f"✅ Loaded chunks from {chunks_file}")
+            except Exception as e:
+                print(f"⚠️ Error loading chunks file: {e}")
+        
+        # Port to TigerDB
+        return self.port_from_networkx(nx_graph, chunks)
 
 
 async def generate_chunks_for_file(
@@ -1337,6 +1570,15 @@ async def main():
     parser.add_argument("--azure-cert-path", help="Path to Azure certificate file (.pem)")
     parser.add_argument("--azure-config-path", help="Path to config.ini file (default: script directory)")
     
+    # TigerGraph/TigerDB arguments
+    parser.add_argument("--tigergraph-host", help="TigerGraph host (e.g., https://your-instance.i.tgcloud.io)")
+    parser.add_argument("--tigergraph-graphname", default="code_knowledge_graph", help="TigerGraph graph name (default: code_knowledge_graph)")
+    parser.add_argument("--tigergraph-username", default="tigergraph", help="TigerGraph username (default: tigergraph)")
+    parser.add_argument("--tigergraph-password", help="TigerGraph password")
+    parser.add_argument("--tigergraph-secret", help="TigerGraph secret (for cloud instances)")
+    parser.add_argument("--port-to-tigergraph", action="store_true", help="Port NetworkX graph to TigerDB after building")
+    parser.add_argument("--port-graph-file", help="Port existing NetworkX graph file to TigerDB (requires --tigergraph-host)")
+    
     # Common arguments
     parser.add_argument(
         "--chunking-strategy",
@@ -1368,9 +1610,35 @@ async def main():
         )
         return
     
+    # Port graph file mode (standalone operation)
+    if args.port_graph_file:
+        if not args.tigergraph_host:
+            raise SystemExit("❌ --tigergraph-host is required when using --port-graph-file")
+        
+        tigergraph = TigerGraphPort(
+            host=args.tigergraph_host,
+            graphname=args.tigergraph_graphname,
+            username=args.tigergraph_username,
+            password=args.tigergraph_password,
+            secret=args.tigergraph_secret,
+            use_ssl=True
+        )
+        
+        # Find chunks file in same directory as graph file
+        graph_path = Path(args.port_graph_file)
+        chunks_file = graph_path.parent / "chunks.json"
+        chunks_file = str(chunks_file) if chunks_file.exists() else None
+        
+        success = tigergraph.port_from_file(str(args.port_graph_file), chunks_file)
+        if success:
+            print("✅ Graph successfully ported to TigerDB")
+        else:
+            raise SystemExit("❌ Failed to port graph to TigerDB")
+        return
+    
     # Full repository mode
     if not args.repo_path:
-        raise SystemExit("❌ Either --file (single file mode) or --repo-path (full repository mode) is required.")
+        raise SystemExit("❌ Either --file (single file mode), --repo-path (full repository mode), or --port-graph-file (port mode) is required.")
     
     # Create output directory
     output_dir = Path(args.output_dir)
@@ -1412,7 +1680,7 @@ async def main():
         opensearch = StandaloneOpenSearch(args.opensearch_host, args.opensearch_index)
         await opensearch.index_chunks(chunks)
     
-    # Build graph
+    # Build graph (always generate graph, especially when Azure embeddings are enabled)
     graph_builder = StandaloneGraphBuilder()
     graph_builder.build_graph(chunks)
     
@@ -1421,6 +1689,22 @@ async def main():
     graph_builder.save_graph(str(graph_file))
     
     stats = graph_builder.get_stats()
+    print(f"\n✅ Graph built and saved: {stats}")
+    
+    # Port to TigerDB if configured or if Azure embeddings are enabled
+    should_port_to_tiger = (args.port_to_tigergraph and args.tigergraph_host) or (args.use_azure_embeddings and args.tigergraph_host)
+    if should_port_to_tiger:
+        print(f"\n🐅 Porting graph to TigerDB...")
+        tigergraph = TigerGraphPort(
+            host=args.tigergraph_host,
+            graphname=args.tigergraph_graphname,
+            username=args.tigergraph_username,
+            password=args.tigergraph_password,
+            secret=args.tigergraph_secret,
+            use_ssl=True
+        )
+        tigergraph.port_from_networkx(graph_builder.graph, chunks)
+    
     print(f"\n✅ Complete! Stats: {stats}")
 
 
