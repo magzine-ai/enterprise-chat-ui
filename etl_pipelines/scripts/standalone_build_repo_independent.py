@@ -2907,9 +2907,8 @@ async def main():
             if parsed:
                 parsed_files.append(parsed)
         
-        print("📊 Extracting external resources...")
-        resource_extractor = ExternalResourceExtractor(args.repo_path)
-        external_resources = resource_extractor.extract(parsed_files, config_data)
+        # External resource extraction removed - schema supports it but extraction is disabled for now
+        # external_resources = []
     
     # Build graph (rich graph if enabled, otherwise simple)
     graph_builder = StandaloneGraphBuilder(use_rich_graph=use_rich_graph)
