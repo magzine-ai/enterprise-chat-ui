@@ -2,143 +2,675 @@
 
 ## Overview
 
-The code knowledge graph represents code chunks and their relationships. The graph is built using NetworkX (in-memory) and can be ported to TigerDB/TigerGraph for persistent storage and advanced queries.
+The code knowledge graph represents software architecture, code structure, and relationships. The graph supports two modes:
 
-## Graph Schema Diagram
+1. **Simple Schema** (backward compatibility): CodeChunk vertices with IN_FILE edges
+2. **Rich Schema** (default): Multiple entity types (Application, Service, File, Class, Method, Config, etc.) with comprehensive relationships
+
+The graph is built using NetworkX (in-memory) and can be ported to TigerDB/TigerGraph for persistent storage and advanced queries.
+
+## Graph Schema Modes
+
+### Simple Schema (Legacy)
+
+**Use**: `--use-simple-graph` flag
+
+- **Vertices**: `CodeChunk` only
+- **Edges**: `IN_FILE` (connects chunks in same file)
+
+### Rich Schema (Default)
+
+**Use**: `--use-rich-graph` flag (default)
+
+- **10 Vertex Types**: Application, Service, File, JavaClass, Method, ConfigArtifact, ConfigKey, Environment, ExternalResource, DeploymentUnit
+- **16 Edge Types**: Comprehensive relationships modeling software architecture
+
+## Rich Schema Diagram
 
 ### Entity Relationship Diagram
 
 ```mermaid
 erDiagram
-    CodeChunk {
-        string chunk_id PK "Primary identifier (deterministic hash)"
-        string type "Chunk type: method, class, file"
-        string fqn "Fully Qualified Name"
-        string file_path "Source file path"
-        int start_line "Start line number"
-        int end_line "End line number"
-        string language "Programming language: java, python, javascript, typescript"
-        string code "Code content (TigerDB only, not in NetworkX)"
-        string summary "Chunk summary/description (TigerDB only)"
+    Application {
+        string app_id PK
+        string name
+        string display_name
+        string type
+        string build_system
     }
     
-    CodeChunk ||--o{ IN_FILE : "from"
-    CodeChunk ||--o{ IN_FILE : "to"
-    
-    IN_FILE {
-        string relationship "Edge type: 'in_file'"
+    Service {
+        string service_id PK
+        string name
+        string path
+        string type
     }
+    
+    DeploymentUnit {
+        string du_id PK
+        string name
+        string type
+        string service
+    }
+    
+    File {
+        string file_id PK
+        string file_path
+        string name
+    }
+    
+    JavaClass {
+        string class_id PK
+        string name
+        string fqn
+        string file_path
+        int start_line
+        int end_line
+        string language
+    }
+    
+    Method {
+        string method_id PK
+        string name
+        string fqn
+        string class_name
+        string file_path
+        int start_line
+        int end_line
+        string language
+    }
+    
+    ConfigArtifact {
+        string artifact_id PK
+        string name
+        string path
+        string type
+        string environment
+    }
+    
+    ConfigKey {
+        string key_id PK
+        string key
+        string value
+        string artifact
+        string environment
+    }
+    
+    Environment {
+        string env_id PK
+        string name
+    }
+    
+    ExternalResource {
+        string resource_id PK
+        string name
+        string type
+        string source
+    }
+    
+    Application ||--o{ DEPLOYED_AS : "deploys"
+    Application ||--o{ OWNS : "owns"
+    Application }o--|| DeploymentUnit : "deployed_as"
+    Application }o--|| Service : "owns"
+    
+    Service ||--o{ CONTAINS : "contains"
+    Service }o--|| File : "contained_in"
+    
+    File ||--o{ DECLARES : "declares"
+    File }o--|| JavaClass : "declared_in"
+    
+    JavaClass ||--o{ EXTENDS : "extends"
+    JavaClass ||--o{ IMPLEMENTS : "implements"
+    JavaClass ||--o{ REFERENCES : "references"
+    JavaClass ||--o{ DECLARES_METHOD : "declares"
+    JavaClass ||--o{ USES_CONFIG : "uses"
+    JavaClass }o--|| JavaClass : "extended_by"
+    JavaClass }o--|| JavaClass : "implemented_by"
+    JavaClass }o--|| JavaClass : "referenced_by"
+    JavaClass }o--|| Method : "declared_in"
+    JavaClass }o--|| ConfigArtifact : "used_by"
+    
+    Method ||--o{ CALLS : "calls"
+    Method ||--o{ USES_CONFIG_METHOD : "uses"
+    Method ||--o{ REFERENCES_KEY : "references"
+    Method ||--o{ USES_RESOURCE : "uses"
+    Method }o--|| Method : "called_by"
+    Method }o--|| ConfigArtifact : "used_by"
+    Method }o--|| ConfigKey : "referenced_by"
+    Method }o--|| ExternalResource : "used_by"
+    
+    ConfigArtifact ||--o{ DEFINES_KEY : "defines"
+    ConfigArtifact }o--|| ConfigKey : "defined_in"
+    
+    ConfigKey ||--o{ OVERRIDES_IN_ENV : "overrides"
+    ConfigKey }o--|| Environment : "overridden_in"
+    
+    DeploymentUnit ||--o{ CONFIGURED_BY : "configured_by"
+    DeploymentUnit }o--|| ConfigArtifact : "configures"
 ```
 
 ### Simplified Schema Visualization
 
 ```mermaid
 graph TB
-    subgraph "Vertex Type: CodeChunk"
-        CC[CodeChunk<br/>━━━━━━━━━━━━━━━━<br/>chunk_id: STRING PK<br/>type: STRING<br/>fqn: STRING<br/>file_path: STRING<br/>start_line: INT<br/>end_line: INT<br/>language: STRING<br/>code: TEXT<br/>summary: STRING]
+    subgraph "Application Layer"
+        App[Application]
+        DU[DeploymentUnit]
+        App -->|DEPLOYED_AS| DU
+        App -->|OWNS| Svc[Service]
     end
     
-    subgraph "Edge Type: IN_FILE"
-        IF[IN_FILE<br/>━━━━━━━━━━━━━━━━<br/>relationship: STRING<br/>FROM: CodeChunk<br/>TO: CodeChunk]
+    subgraph "Code Structure"
+        Svc -->|CONTAINS| File[File]
+        File -->|DECLARES| JavaClass[JavaClass]
+        JavaClass -->|EXTENDS| JavaClass2[JavaClass]
+        JavaClass -->|IMPLEMENTS| JavaClass3[JavaClass]
+        JavaClass -->|REFERENCES| JavaClass4[JavaClass]
+        JavaClass -->|DECLARES_METHOD| Method[Method]
+        Method -->|CALLS| Method2[Method]
     end
     
-    CC -->|creates| IF
-    IF -->|connects| CC
+    subgraph "Configuration"
+        JavaClass -->|USES_CONFIG| CA[ConfigArtifact]
+        Method -->|USES_CONFIG_METHOD| CA
+        Method -->|REFERENCES_KEY| CK[ConfigKey]
+        CA -->|DEFINES_KEY| CK
+        CK -->|OVERRIDES_IN_ENV| Env[Environment]
+        DU -->|CONFIGURED_BY| CA2[ConfigArtifact]
+    end
     
-    style CC fill:#e1f5ff,stroke:#01579b,stroke-width:2px
-    style IF fill:#fff4e1,stroke:#e65100,stroke-width:2px
+    subgraph "External Resources"
+        Method -->|USES_RESOURCE| ER[ExternalResource]
+    end
 ```
 
-## Entity Relationship Details
+## Vertex Types
 
-### Vertex: CodeChunk
+### Application
 
-**Description**: Represents a code chunk extracted from source files.
-
-**Attributes**:
-
-| Attribute | Type | Description | NetworkX | TigerDB |
-|-----------|------|-------------|----------|---------|
-| `chunk_id` | STRING | Primary identifier (deterministic hash) | Node ID | PRIMARY_ID |
-| `type` | STRING | Chunk type: `method`, `class`, or `file` | ✓ | ✓ |
-| `fqn` | STRING | Fully Qualified Name (e.g., `UserService.getUser`) | ✓ | ✓ |
-| `file_path` | STRING | Source file path | ✓ | ✓ |
-| `start_line` | INT | Start line number in source file | ✓ | ✓ |
-| `end_line` | INT | End line number in source file | ✓ | ✓ |
-| `language` | STRING | Programming language (`java`, `python`, `javascript`, `typescript`) | ✓ | ✓ |
-| `code` | TEXT | Code content | ✗ | ✓ |
-| `summary` | STRING | Chunk summary/description | ✗ | ✓ |
-
-**Chunk Types**:
-- **`method`**: Individual method/function chunks
-- **`class`**: Class metadata chunks (signature, fields, static blocks)
-- **`file`**: Entire file chunks (for small files in hybrid strategy)
-
-### Edge: IN_FILE
-
-**Description**: Directed edge connecting code chunks that belong to the same source file.
+**Description**: Top-level application entity representing the entire software application.
 
 **Attributes**:
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `relationship` | STRING | Always `'in_file'` |
+| `app_id` | STRING | Primary identifier |
+| `name` | STRING | Application name (from pom.xml artifactId or package.json name) |
+| `display_name` | STRING | Display name (from pom.xml name or package.json description) |
+| `type` | STRING | Application type (`java`, `nodejs`, `python`, etc.) |
+| `build_system` | STRING | Build system (`maven`, `npm`, `gradle`, etc.) |
 
-**Semantics**:
-- **From**: Source chunk
-- **To**: Target chunk
-- **Meaning**: Both chunks are in the same file
-- **Direction**: Directed (chunk1 → chunk2)
+### Service
+
+**Description**: Service or module within an application (e.g., Maven module, microservice).
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `service_id` | STRING | Primary identifier |
+| `name` | STRING | Service name |
+| `path` | STRING | File system path to service |
+| `type` | STRING | Service type (`maven-module`, `nodejs-service`, `inferred`, etc.) |
+
+### DeploymentUnit
+
+**Description**: Deployment artifact (JAR, WAR, container, etc.).
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `du_id` | STRING | Primary identifier |
+| `name` | STRING | Deployment unit name (e.g., `myapp.war`) |
+| `type` | STRING | Deployment type (`jar`, `war`, `nodejs`, etc.) |
+| `service` | STRING | Associated service name |
+
+### File
+
+**Description**: Source code file.
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `file_id` | STRING | Primary identifier (hash of file_path) |
+| `file_path` | STRING | Full file path |
+| `name` | STRING | File name (basename) |
+
+### JavaClass
+
+**Description**: Java class (or class in other languages).
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `class_id` | STRING | Primary identifier |
+| `name` | STRING | Class name |
+| `fqn` | STRING | Fully Qualified Name |
+| `file_path` | STRING | Source file path |
+| `start_line` | INT | Start line number |
+| `end_line` | INT | End line number |
+| `language` | STRING | Programming language |
+
+### Method
+
+**Description**: Method or function.
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `method_id` | STRING | Primary identifier |
+| `name` | STRING | Method name |
+| `fqn` | STRING | Fully Qualified Name (e.g., `UserService.getUser`) |
+| `class_name` | STRING | Containing class name |
+| `file_path` | STRING | Source file path |
+| `start_line` | INT | Start line number |
+| `end_line` | INT | End line number |
+| `language` | STRING | Programming language |
+
+### ConfigArtifact
+
+**Description**: Configuration file (application.yml, application.properties, etc.).
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `artifact_id` | STRING | Primary identifier |
+| `name` | STRING | Config file name |
+| `path` | STRING | Full file path |
+| `type` | STRING | Config type (`yaml`, `properties`, `env`, etc.) |
+| `environment` | STRING | Environment (`default`, `production`, `development`, `test`) |
+
+### ConfigKey
+
+**Description**: Configuration key-value pair.
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `key_id` | STRING | Primary identifier |
+| `key` | STRING | Configuration key (e.g., `database.url`) |
+| `value` | STRING | Configuration value |
+| `artifact` | STRING | Config artifact name |
+| `environment` | STRING | Environment |
+
+### Environment
+
+**Description**: Environment (dev, prod, test, etc.).
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `env_id` | STRING | Primary identifier |
+| `name` | STRING | Environment name (`default`, `production`, `development`, `test`) |
+
+### ExternalResource
+
+**Description**: External system or resource (database, messaging queue, cache, etc.).
+
+**Attributes**:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `resource_id` | STRING | Primary identifier |
+| `name` | STRING | Resource name (e.g., `Oracle Database`, `Apache Kafka`) |
+| `type` | STRING | Resource type (`database`, `messaging`, `cache`) |
+| `source` | STRING | Source file or config where resource was identified |
+
+**Note**: External resource extraction is currently disabled. The schema supports it, but extraction logic is commented out.
+
+## Edge Types
+
+### DEPLOYED_AS
+
+- **From**: `Application`
+- **To**: `DeploymentUnit`
+- **Description**: Application is deployed as a deployment unit
+
+### OWNS
+
+- **From**: `Application`
+- **To**: `Service`
+- **Description**: Application owns a service/module
+
+### CONTAINS
+
+- **From**: `Service`
+- **To**: `File`
+- **Description**: Service contains source files
+
+### DECLARES
+
+- **From**: `File`
+- **To**: `JavaClass`
+- **Description**: File declares a class
+
+### EXTENDS
+
+- **From**: `JavaClass`
+- **To**: `JavaClass`
+- **Description**: Class extends another class (inheritance)
+
+### IMPLEMENTS
+
+- **From**: `JavaClass`
+- **To**: `JavaClass`
+- **Description**: Class implements an interface
+
+### REFERENCES
+
+- **From**: `JavaClass`
+- **To**: `JavaClass`
+- **Description**: Class references another class (general reference)
+
+### DECLARES_METHOD
+
+- **From**: `JavaClass`
+- **To**: `Method`
+- **Description**: Class declares a method
+
+### CALLS
+
+- **From**: `Method`
+- **To**: `Method`
+- **Description**: Method calls another method
+
+### USES_CONFIG
+
+- **From**: `JavaClass`
+- **To**: `ConfigArtifact`
+- **Description**: Class uses a configuration artifact
+
+### USES_CONFIG_METHOD
+
+- **From**: `Method`
+- **To**: `ConfigArtifact`
+- **Description**: Method uses a configuration artifact
+
+### REFERENCES_KEY
+
+- **From**: `Method`
+- **To**: `ConfigKey`
+- **Description**: Method references a configuration key
+
+### DEFINES_KEY
+
+- **From**: `ConfigArtifact`
+- **To**: `ConfigKey`
+- **Description**: Config artifact defines a configuration key
+
+### OVERRIDES_IN_ENV
+
+- **From**: `ConfigKey`
+- **To**: `Environment`
+- **Description**: Config key is overridden in an environment
+
+### CONFIGURED_BY
+
+- **From**: `DeploymentUnit`
+- **To**: `ConfigArtifact`
+- **Description**: Deployment unit is configured by a config artifact
+
+### USES_RESOURCE
+
+- **From**: `Method`
+- **To**: `ExternalResource`
+- **Description**: Method uses an external resource
+
+**Note**: External resource relationships are currently disabled. The schema supports it, but relationship creation is commented out.
 
 ## Graph Structure Example
 
 ```mermaid
 graph TD
-    A[CodeChunk<br/>chunk_id: chunk_abc123<br/>type: class<br/>fqn: UserService<br/>file: UserService.java] -->|IN_FILE| B[CodeChunk<br/>chunk_id: chunk_def456<br/>type: method<br/>fqn: UserService.getUser<br/>file: UserService.java]
-    A -->|IN_FILE| C[CodeChunk<br/>chunk_id: chunk_ghi789<br/>type: method<br/>fqn: UserService.createUser<br/>file: UserService.java]
-    B -->|IN_FILE| C
+    App[Application: MyApp] -->|OWNS| Svc[Service: user-service]
+    App -->|DEPLOYED_AS| DU[DeploymentUnit: myapp.war]
     
-    D[CodeChunk<br/>chunk_id: chunk_jkl012<br/>type: class<br/>fqn: OrderService<br/>file: OrderService.java] -->|IN_FILE| E[CodeChunk<br/>chunk_id: chunk_mno345<br/>type: method<br/>fqn: OrderService.processOrder<br/>file: OrderService.java]
+    Svc -->|CONTAINS| File1[File: UserService.java]
+    Svc -->|CONTAINS| File2[File: application.yml]
     
-    style A fill:#e1f5ff
-    style D fill:#e1f5ff
-    style B fill:#fff4e1
-    style C fill:#fff4e1
-    style E fill:#fff4e1
-```
-
-**Legend**:
-- 🔵 Blue nodes: Class chunks
-- 🟡 Yellow nodes: Method chunks
-- Arrows: IN_FILE relationships (same file)
-
-## NetworkX Implementation
-
-**Graph Type**: `networkx.MultiDiGraph` (Directed graph with multiple edges)
-
-**Node Structure**:
-```python
-{
-    'chunk_id': 'chunk_abc123',  # Node ID
-    'type': 'method',
-    'fqn': 'UserService.getUser',
-    'file_path': '/path/to/UserService.java',
-    'start_line': 10,
-    'end_line': 25,
-    'language': 'java'
-}
-```
-
-**Edge Structure**:
-```python
-{
-    'relationship': 'in_file'
-}
+    File1 -->|DECLARES| Class1[JavaClass: UserService]
+    Class1 -->|EXTENDS| Class2[JavaClass: BaseService]
+    Class1 -->|DECLARES_METHOD| Method1[Method: getUser]
+    Class1 -->|DECLARES_METHOD| Method2[Method: createUser]
+    Method1 -->|CALLS| Method2
+    
+    File2 -->|DECLARES| Config1[ConfigArtifact: application.yml]
+    Config1 -->|DEFINES_KEY| Key1[ConfigKey: database.url]
+    Key1 -->|OVERRIDES_IN_ENV| Env1[Environment: production]
+    
+    Class1 -->|USES_CONFIG| Config1
+    Method1 -->|USES_CONFIG_METHOD| Config1
+    Method1 -->|REFERENCES_KEY| Key1
+    
+    DU -->|CONFIGURED_BY| Config1
 ```
 
 ## TigerDB/TigerGraph Schema
 
-### Vertex Type Definition
+### Rich Schema Vertex Types
+
+```sql
+CREATE VERTEX Application (
+    PRIMARY_ID app_id STRING,
+    name STRING,
+    display_name STRING,
+    type STRING,
+    build_system STRING
+)
+
+CREATE VERTEX Service (
+    PRIMARY_ID service_id STRING,
+    name STRING,
+    path STRING,
+    type STRING
+)
+
+CREATE VERTEX DeploymentUnit (
+    PRIMARY_ID du_id STRING,
+    name STRING,
+    type STRING,
+    service STRING
+)
+
+CREATE VERTEX File (
+    PRIMARY_ID file_id STRING,
+    file_path STRING,
+    name STRING
+)
+
+CREATE VERTEX JavaClass (
+    PRIMARY_ID class_id STRING,
+    name STRING,
+    fqn STRING,
+    file_path STRING,
+    start_line INT,
+    end_line INT,
+    language STRING
+)
+
+CREATE VERTEX Method (
+    PRIMARY_ID method_id STRING,
+    name STRING,
+    fqn STRING,
+    class_name STRING,
+    file_path STRING,
+    start_line INT,
+    end_line INT,
+    language STRING
+)
+
+CREATE VERTEX ConfigArtifact (
+    PRIMARY_ID artifact_id STRING,
+    name STRING,
+    path STRING,
+    type STRING,
+    environment STRING
+)
+
+CREATE VERTEX ConfigKey (
+    PRIMARY_ID key_id STRING,
+    key STRING,
+    value STRING,
+    artifact STRING,
+    environment STRING
+)
+
+CREATE VERTEX Environment (
+    PRIMARY_ID env_id STRING,
+    name STRING
+)
+
+CREATE VERTEX ExternalResource (
+    PRIMARY_ID resource_id STRING,
+    name STRING,
+    type STRING,
+    source STRING
+)
+```
+
+### Rich Schema Edge Types
+
+```sql
+CREATE DIRECTED EDGE DEPLOYED_AS (
+    FROM Application,
+    TO DeploymentUnit,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE OWNS (
+    FROM Application,
+    TO Service,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE CONTAINS (
+    FROM Service,
+    TO File,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE DECLARES (
+    FROM File,
+    TO JavaClass,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE EXTENDS (
+    FROM JavaClass,
+    TO JavaClass,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE IMPLEMENTS (
+    FROM JavaClass,
+    TO JavaClass,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE REFERENCES (
+    FROM JavaClass,
+    TO JavaClass,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE DECLARES_METHOD (
+    FROM JavaClass,
+    TO Method,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE CALLS (
+    FROM Method,
+    TO Method,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE USES_CONFIG (
+    FROM JavaClass,
+    TO ConfigArtifact,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE USES_CONFIG_METHOD (
+    FROM Method,
+    TO ConfigArtifact,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE REFERENCES_KEY (
+    FROM Method,
+    TO ConfigKey,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE DEFINES_KEY (
+    FROM ConfigArtifact,
+    TO ConfigKey,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE OVERRIDES_IN_ENV (
+    FROM ConfigKey,
+    TO Environment,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE CONFIGURED_BY (
+    FROM DeploymentUnit,
+    TO ConfigArtifact,
+    relationship STRING
+)
+
+CREATE DIRECTED EDGE USES_RESOURCE (
+    FROM Method,
+    TO ExternalResource,
+    relationship STRING
+)
+```
+
+### Graph Definition
+
+```sql
+CREATE GRAPH code_knowledge_graph (
+    Application,
+    Service,
+    DeploymentUnit,
+    File,
+    JavaClass,
+    Method,
+    ConfigArtifact,
+    ConfigKey,
+    Environment,
+    ExternalResource,
+    DEPLOYED_AS,
+    OWNS,
+    CONTAINS,
+    DECLARES,
+    EXTENDS,
+    IMPLEMENTS,
+    REFERENCES,
+    DECLARES_METHOD,
+    CALLS,
+    USES_CONFIG,
+    USES_CONFIG_METHOD,
+    REFERENCES_KEY,
+    DEFINES_KEY,
+    OVERRIDES_IN_ENV,
+    CONFIGURED_BY,
+    USES_RESOURCE
+)
+```
+
+## Simple Schema (Backward Compatibility)
+
+### Vertex Type: CodeChunk
 
 ```sql
 CREATE VERTEX CodeChunk (
@@ -154,7 +686,7 @@ CREATE VERTEX CodeChunk (
 )
 ```
 
-### Edge Type Definition
+### Edge Type: IN_FILE
 
 ```sql
 CREATE DIRECTED EDGE IN_FILE (
@@ -164,79 +696,79 @@ CREATE DIRECTED EDGE IN_FILE (
 )
 ```
 
-### Graph Definition
-
-```sql
-CREATE GRAPH code_knowledge_graph (
-    CodeChunk,
-    IN_FILE
-)
-```
-
-## Graph Building Logic
-
-### Node Creation
-
-1. **For each chunk**:
-   - Create node with `chunk_id` as node ID
-   - Add attributes: `type`, `fqn`, `file_path`, `start_line`, `end_line`, `language`
-
-### Edge Creation
-
-1. **For each pair of chunks**:
-   - If `chunk1['file_path'] == chunk2['file_path']`:
-     - Create directed edge: `chunk1['chunk_id'] → chunk2['chunk_id']`
-     - Edge attribute: `relationship='in_file'`
-
-### Current Limitations
-
-- **Only file-level relationships**: Edges are created only between chunks in the same file
-- **No cross-file relationships**: Method calls, imports, inheritance are not yet modeled
-- **No semantic relationships**: No edges for "calls", "imports", "extends", "implements"
-
-## Future Enhancements
-
-Potential edge types to add:
-
-1. **CALLS**: Method A calls Method B
-2. **IMPORTS**: File A imports from File B
-3. **EXTENDS**: Class A extends Class B
-4. **IMPLEMENTS**: Class A implements Interface B
-5. **DEPENDS_ON**: File A depends on File B
-6. **REFERENCES**: Chunk A references Chunk B
-
 ## Usage Examples
-
-### Query: Find all chunks in a file
-
-```python
-# NetworkX
-file_chunks = [node for node, data in graph.nodes(data=True) 
-               if data['file_path'] == 'UserService.java']
-
-# TigerDB GSQL
-SELECT * FROM CodeChunk WHERE file_path == "UserService.java"
-```
-
-### Query: Find related chunks (same file)
-
-```python
-# NetworkX
-related = list(graph.successors(chunk_id))  # Chunks in same file
-
-# TigerDB GSQL
-SELECT tgt FROM CodeChunk src -(IN_FILE)-> CodeChunk tgt 
-WHERE src.chunk_id == "chunk_abc123"
-```
 
 ### Query: Find all methods in a class
 
 ```python
-# NetworkX
-class_chunk = [node for node, data in graph.nodes(data=True) 
-               if data['fqn'] == 'UserService' and data['type'] == 'class'][0]
-methods = [node for node in graph.successors(class_chunk)
-           if graph.nodes[node]['type'] == 'method']
+# NetworkX (Rich Schema)
+class_id = "class_abc123"
+methods = [node for node in graph.successors(class_id)
+           if graph.nodes[node].get('entity_type') == 'Method'
+           and any(e.get('relationship') == 'DECLARES_METHOD' 
+                   for _, _, e in graph.edges(class_id, data=True))]
+
+# TigerDB GSQL
+SELECT tgt FROM JavaClass src -(DECLARES_METHOD)-> Method tgt 
+WHERE src.class_id == "class_abc123"
+```
+
+### Query: Find all classes that extend a base class
+
+```python
+# NetworkX (Rich Schema)
+base_class_id = "class_base123"
+subclasses = [node for node in graph.predecessors(base_class_id)
+              if any(e.get('relationship') == 'EXTENDS' 
+                     for _, _, e in graph.edges(node, base_class_id, data=True))]
+
+# TigerDB GSQL
+SELECT src FROM JavaClass src -(EXTENDS)-> JavaClass tgt 
+WHERE tgt.class_id == "class_base123"
+```
+
+### Query: Find all methods that call a specific method
+
+```python
+# NetworkX (Rich Schema)
+target_method_id = "method_xyz789"
+callers = [node for node in graph.predecessors(target_method_id)
+           if any(e.get('relationship') == 'CALLS' 
+                  for _, _, e in graph.edges(node, target_method_id, data=True))]
+
+# TigerDB GSQL
+SELECT src FROM Method src -(CALLS)-> Method tgt 
+WHERE tgt.method_id == "method_xyz789"
+```
+
+### Query: Find all config keys used by a method
+
+```python
+# NetworkX (Rich Schema)
+method_id = "method_abc123"
+config_keys = [node for node in graph.successors(method_id)
+               if graph.nodes[node].get('entity_type') == 'ConfigKey'
+               and any(e.get('relationship') == 'REFERENCES_KEY' 
+                       for _, _, e in graph.edges(method_id, node, data=True))]
+
+# TigerDB GSQL
+SELECT tgt FROM Method src -(REFERENCES_KEY)-> ConfigKey tgt 
+WHERE src.method_id == "method_abc123"
+```
+
+### Query: Find all services in an application
+
+```python
+# NetworkX (Rich Schema)
+app_id = "app_myapp"
+services = [node for node in graph.successors(app_id)
+            if graph.nodes[node].get('entity_type') == 'Service'
+            and any(e.get('relationship') == 'OWNS' 
+                    for _, _, e in graph.edges(app_id, node, data=True))]
+
+# TigerDB GSQL
+SELECT tgt FROM Application src -(OWNS)-> Service tgt 
+WHERE src.app_id == "app_myapp"
 ```
 
 ## Statistics
@@ -245,10 +777,35 @@ After building the graph, you can get statistics:
 
 ```python
 stats = graph_builder.get_stats()
-# Returns: {'nodes': 1000, 'edges': 2500}
+# Returns: {'nodes': 5000, 'edges': 12000}
 ```
 
-**Typical ratios**:
-- **Nodes**: One per code chunk
-- **Edges**: ~2-3 edges per node (chunks in same file are all connected)
+**Typical ratios** (Rich Schema):
+- **Nodes**: Multiple types (Application: 1, Services: 1-10, Files: 100-1000, Classes: 500-5000, Methods: 2000-20000)
+- **Edges**: ~2-3 edges per node on average
 
+## Command-Line Options
+
+### Rich Schema (Default)
+
+```bash
+python standalone_build_repo_independent.py \
+  --repo-path /path/to/repo \
+  --use-rich-graph
+```
+
+### Simple Schema (Backward Compatibility)
+
+```bash
+python standalone_build_repo_independent.py \
+  --repo-path /path/to/repo \
+  --use-simple-graph
+```
+
+## Notes
+
+- **ExternalResource extraction is disabled**: The schema supports ExternalResource vertices and USES_RESOURCE edges, but the extraction logic is currently commented out. This can be re-enabled in the future.
+
+- **Configuration relationships**: Some relationships (like USES_CONFIG, REFERENCES_KEY) are created based on file proximity and code analysis. More sophisticated analysis can be added later.
+
+- **Language support**: While the schema uses "JavaClass", it supports classes from other languages (Python, JavaScript, TypeScript, etc.). The entity type name is kept as "JavaClass" for consistency.
