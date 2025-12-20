@@ -64,11 +64,20 @@ except ImportError:
 
 # OpenSearch
 try:
-    from opensearchpy import OpenSearch
+    from opensearchpy import OpenSearch, RequestsHttpConnection
     OPENSEARCH_AVAILABLE = True
 except ImportError:
     OPENSEARCH_AVAILABLE = False
     print("⚠️ OpenSearch not available. Install: pip install opensearch-py")
+
+# AWS Authentication for OpenSearch
+try:
+    from aws_requests_auth.aws_auth import AWSRequestsAuth
+    from boto3 import session
+    AWS_AUTH_AVAILABLE = True
+except ImportError:
+    AWS_AUTH_AVAILABLE = False
+    print("⚠️ AWS authentication not available. Install: pip install aws-requests-auth boto3")
 
 # NetworkX for graph
 try:
@@ -633,12 +642,12 @@ class StandaloneIndexer:
             # Sequential processing with progress bar
             file_iter = tqdm(code_files, desc="Processing files") if TQDM_AVAILABLE else code_files
             for file_path in file_iter:
-                parsed = self.parser.parse_file(file_path)
-                if not parsed:
-                    continue
-                
-                file_chunks = self._generate_chunks_for_file(parsed, file_path)
-                all_chunks.extend(file_chunks)
+            parsed = self.parser.parse_file(file_path)
+            if not parsed:
+                continue
+            
+            file_chunks = self._generate_chunks_for_file(parsed, file_path)
+            all_chunks.extend(file_chunks)
                 processed_files.add(file_path)
                 
                 # Save checkpoint periodically
@@ -668,8 +677,8 @@ class StandaloneIndexer:
             # Add embeddings to chunks with progress bar
             embed_iter = tqdm(zip(all_chunks, embeddings), total=len(all_chunks), desc="Adding embeddings") if TQDM_AVAILABLE else zip(all_chunks, embeddings)
             for chunk, embedding in embed_iter:
-                if embedding:
-                    chunk['embedding'] = embedding
+            if embedding:
+                chunk['embedding'] = embedding
         
         # Generate statistics with pandas if available
         if PANDAS_AVAILABLE and all_chunks:
@@ -1062,27 +1071,120 @@ class StandaloneIndexer:
 
 
 class StandaloneOpenSearch:
-    """Self-contained OpenSearch client."""
+    """Self-contained OpenSearch client with AWS authentication support."""
     
-    def __init__(self, host: str, index: str, use_ssl: bool = False):
-        self.host = host
-        self.index = index
+    def __init__(
+        self, 
+        host: Optional[str] = None, 
+        index: Optional[str] = None, 
+        config_path: Optional[str] = None,
+        use_aws_auth: bool = True,
+        region: Optional[str] = None,
+        use_ssl: bool = True,
+        verify_certs: bool = True
+    ):
+        """
+        Initialize OpenSearch client and load configuration.
+        
+        Args:
+            host: OpenSearch endpoint (optional if using config file)
+            index: OpenSearch index name (optional if using config file)
+            config_path: Path to config.ini file (optional)
+            use_aws_auth: Use AWS authentication (default: True)
+            region: AWS region (optional, will use config or default)
+            use_ssl: Use SSL for connection (default: True)
+            verify_certs: Verify SSL certificates (default: True)
+        """
         self.client = None
         
-        if OPENSEARCH_AVAILABLE:
-            try:
-                host_parts = host.split(':')
+        # Load config
+        if config_path is None:
+            current_dir = os.path.dirname(__file__)
+            config_path = os.path.join(current_dir, "config.ini")
+        
+        if os.path.exists(config_path):
+            self.config = configparser.ConfigParser()
+            self.config.read(config_path)
+            print(f"✅ Loaded config from {config_path}")
+            print(f"   Sections found: {self.config.sections()}")
+            
+            # Extract OpenSearch config from config file
+            if 'aws_info' in self.config:
+                self.opensearch_endpoint = self.config['aws_info'].get('opensearch_endpoint', host or '')
+                self.index_name = self.config['aws_info'].get('index_name', index or 'code_chunks')
+                self.region = self.config['aws_info'].get('region', region or 'us-east-1')
+            else:
+                # Fallback to provided parameters
+                self.opensearch_endpoint = host or ''
+                self.index_name = index or 'code_chunks'
+                self.region = region or 'us-east-1'
+        else:
+            # Use provided parameters
+            self.opensearch_endpoint = host or ''
+            self.index_name = index or 'code_chunks'
+            self.region = region or 'us-east-1'
+            self.config = None
+        
+        if not self.opensearch_endpoint:
+            print("⚠️ OpenSearch endpoint not provided and not found in config")
+            return
+        
+        if not OPENSEARCH_AVAILABLE:
+            print("⚠️ OpenSearch not available")
+            return
+        
+        try:
+            if use_aws_auth and AWS_AUTH_AVAILABLE:
+                # AWS Auth
+                aws_session = session.Session()
+                credentials = aws_session.get_credentials()
+                
+                # Extract hostname from endpoint (remove protocol and port)
+                aws_host = self.opensearch_endpoint.replace('https://', '').replace('http://', '').split(':')[0]
+                
+                awsauth = AWSRequestsAuth(
+                    credentials=credentials,
+                    aws_host=aws_host,
+                    aws_region=self.region,
+                    aws_service='es'
+                )
+                
+                # Determine port (default 443 for HTTPS)
+                port = 443
+                if ':' in self.opensearch_endpoint:
+                    port_part = self.opensearch_endpoint.split(':')[-1].split('/')[0]
+                    try:
+                        port = int(port_part)
+                    except ValueError:
+                        port = 443
+                
+                hostname = aws_host
+                
+                self.client = OpenSearch(
+                    hosts=[{'host': hostname, 'port': port}],
+                    http_auth=awsauth,
+                    use_ssl=use_ssl,
+                    verify_certs=verify_certs,
+                    connection_class=RequestsHttpConnection
+                )
+                print(f"✅ Connected to AWS OpenSearch: {self.opensearch_endpoint}")
+            else:
+                # Basic authentication (for local development)
+                host_parts = self.opensearch_endpoint.replace('https://', '').replace('http://', '').split(':')
                 hostname = host_parts[0]
                 port = int(host_parts[1]) if len(host_parts) > 1 else 9200
                 
                 self.client = OpenSearch(
                     hosts=[{'host': hostname, 'port': port}],
                     use_ssl=use_ssl,
-                    verify_certs=False,
+                    verify_certs=verify_certs,
+                    connection_class=RequestsHttpConnection
                 )
-                print(f"✅ Connected to OpenSearch: {host}")
+                print(f"✅ Connected to OpenSearch: {self.opensearch_endpoint}")
             except Exception as e:
                 print(f"⚠️ Failed to connect to OpenSearch: {e}")
+            import traceback
+            print(traceback.format_exc())
     
     async def ensure_index(self, embedding_dim: int = 1536):
         """Ensure index exists with proper mapping."""
@@ -1090,8 +1192,8 @@ class StandaloneOpenSearch:
             return False
         
         try:
-            if self.client.indices.exists(index=self.index):
-                print(f"✅ Index '{self.index}' exists")
+            if self.client.indices.exists(index=self.index_name):
+                print(f"✅ Index '{self.index_name}' exists")
                 return True
             
             mapping = {
@@ -1111,8 +1213,8 @@ class StandaloneOpenSearch:
                 }
             }
             
-            self.client.indices.create(index=self.index, body=mapping)
-            print(f"✅ Created index '{self.index}'")
+            self.client.indices.create(index=self.index_name, body=mapping)
+            print(f"✅ Created index '{self.index_name}'")
             return True
         except Exception as e:
             print(f"❌ Error ensuring index: {e}")
@@ -1142,7 +1244,7 @@ class StandaloneOpenSearch:
             
             try:
                 # Use chunk_id as the document ID for easy retrieval
-                self.client.index(index=self.index, id=chunk['chunk_id'], body=doc)
+                self.client.index(index=self.index_name, id=chunk['chunk_id'], body=doc)
             except Exception as e:
                 print(f"⚠️ Error indexing chunk {chunk.get('chunk_id', 'unknown')}: {e}")
         
@@ -1561,8 +1663,14 @@ async def main():
     # Full repository mode arguments
     parser.add_argument("--repo-path", help="Repository path (required for full repository mode)")
     parser.add_argument("--output-dir", default="./output", help="Output directory (for full repository mode)")
-    parser.add_argument("--opensearch-host", help="OpenSearch host (e.g., localhost:9200)")
+    parser.add_argument("--opensearch-host", help="OpenSearch host/endpoint (e.g., localhost:9200 or search-domain.us-east-1.es.amazonaws.com)")
     parser.add_argument("--opensearch-index", default="code_chunks", help="OpenSearch index name")
+    parser.add_argument("--opensearch-config", help="Path to config.ini file for OpenSearch configuration")
+    parser.add_argument("--opensearch-use-aws-auth", action="store_true", default=True, help="Use AWS authentication for OpenSearch (default: True)")
+    parser.add_argument("--opensearch-no-aws-auth", action="store_false", dest="opensearch_use_aws_auth", help="Disable AWS authentication (use basic auth)")
+    parser.add_argument("--opensearch-region", default="us-east-1", help="AWS region for OpenSearch (default: us-east-1)")
+    parser.add_argument("--opensearch-use-ssl", action="store_true", default=True, help="Use SSL for OpenSearch connection (default: True)")
+    parser.add_argument("--opensearch-verify-certs", action="store_true", default=True, help="Verify SSL certificates (default: True)")
     parser.add_argument("--openai-api-key", help="OpenAI API key for embeddings")
     parser.add_argument("--embedding-model", default="text-embedding-3-small", help="Embedding model")
     parser.add_argument("--use-azure-embeddings", action="store_true", help="Use Azure OpenAI Embeddings service (requires config.ini)")
@@ -1676,8 +1784,16 @@ async def main():
     print(f"✅ Saved chunks to {chunks_file}")
     
     # Index to OpenSearch if configured
-    if args.opensearch_host:
-        opensearch = StandaloneOpenSearch(args.opensearch_host, args.opensearch_index)
+    if args.opensearch_host or args.opensearch_config:
+        opensearch = StandaloneOpenSearch(
+            host=args.opensearch_host,
+            index=args.opensearch_index,
+            config_path=args.opensearch_config,
+            use_aws_auth=args.opensearch_use_aws_auth,
+            region=args.opensearch_region,
+            use_ssl=args.opensearch_use_ssl,
+            verify_certs=args.opensearch_verify_certs
+        )
         await opensearch.index_chunks(chunks)
     
     # Build graph (always generate graph, especially when Azure embeddings are enabled)

@@ -31,6 +31,10 @@ openai>=2.0.0
 # OpenSearch client (optional - only if you want to index/query OpenSearch)
 opensearch-py==2.4.0
 
+# AWS Authentication for OpenSearch (optional - only if using AWS OpenSearch)
+# aws-requests-auth>=0.4.3  # For AWS authentication
+# boto3>=1.34.0  # AWS SDK for Python
+
 # Note: All scripts in this directory are completely self-contained and independent.
 # No backend dependencies are required.
 
