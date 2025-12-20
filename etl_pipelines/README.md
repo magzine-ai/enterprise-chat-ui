@@ -1,0 +1,420 @@
+# ETL Pipelines
+
+Standalone ETL (Extract, Transform, Load) scripts for code repository indexing, chunking, and graph generation. These scripts are **completely self-contained** and can run independently without the main backend application.
+
+## Overview
+
+This directory contains standalone scripts for:
+- **Repository Indexing**: Parse code repositories and generate chunks with embeddings
+- **Graph Building**: Create knowledge graphs from code chunks
+- **Query & Reporting**: Query indexed chunks and generate HTML reports
+
+## Project Structure
+
+```
+etl_pipelines/
+├── README.md                          # This file
+├── requirements.txt                   # Python dependencies
+├── ADVANCED_ETL_FEATURES.md          # Advanced features guide
+├── .gitignore                         # Git ignore rules
+└── scripts/                           # ETL scripts
+    ├── __init__.py
+    ├── standalone_build_repo_independent.py      # Repository indexing
+    └── standalone_query_to_html_independent.py   # Query & HTML reports
+```
+
+## Scripts
+
+### 1. `standalone_build_repo_independent.py`
+
+**Purpose**: Parse repositories and generate chunks with optional embeddings and graph building.
+
+**Features**:
+- Parse code repositories (Java, Python, JavaScript/TypeScript, Go, Rust)
+- Generate chunks using configurable strategies
+- **Progress bars** (tqdm) for long-running operations
+- **Batch embedding generation** for efficient API usage
+- **Parallel file processing** (joblib) for faster indexing
+- **Data validation** (pydantic) for chunk quality
+- **Statistics and analytics** (pandas) for insights
+- **Checkpointing** to resume interrupted processing
+- Generate embeddings (optional, requires OpenAI API key)
+- Index to OpenSearch (optional)
+- Build NetworkX knowledge graphs
+- Single file mode: Generate chunks as JSON without indexing
+
+### 2. `standalone_query_to_html_independent.py`
+
+**Purpose**: Query OpenSearch chunks and generate HTML reports with Mermaid graphs.
+
+**Features**:
+- Query OpenSearch index
+- Generate HTML reports with search results
+- Include Mermaid graph visualizations
+- No database or backend required
+
+## Installation
+
+### Quick Start
+
+```bash
+cd etl_pipelines
+pip install -r requirements.txt
+```
+
+### Verify Installation
+
+```bash
+python -c "
+import tree_sitter
+import tree_sitter_python
+import tree_sitter_java
+import tree_sitter_javascript
+import networkx
+print('✅ Core libraries installed')
+"
+```
+
+## Usage
+
+### 1. Build Repository Index
+
+#### Single File Mode (No OpenSearch/embeddings needed)
+
+Generate chunks as JSON for a single file:
+
+```bash
+cd etl_pipelines/scripts
+
+python standalone_build_repo_independent.py \
+  --file /path/to/file.java \
+  --output chunks.json \
+  --chunking-strategy class_metadata
+```
+
+#### Full Repository Mode
+
+Index entire repository with optional embeddings and OpenSearch:
+
+```bash
+cd etl_pipelines/scripts
+
+python standalone_build_repo_independent.py \
+  --repo-path /path/to/repository \
+  --output-dir ./output \
+  --opensearch-host localhost:9200 \
+  --opensearch-index code_chunks \
+  --openai-api-key sk-... \
+  --chunking-strategy class_metadata
+```
+
+**Arguments**:
+- `--file` - Path to single file (single file mode)
+- `--output` - Output JSON file (single file mode, default: `chunks.json`)
+- `--repo-path` - Repository path (full repository mode)
+- `--output-dir` - Output directory (full repository mode, default: `./output`)
+- `--opensearch-host` - OpenSearch host (optional, e.g., `localhost:9200`)
+- `--opensearch-index` - OpenSearch index name (optional, default: `code_chunks`)
+- `--openai-api-key` - OpenAI API key for embeddings (optional)
+- `--embedding-model` - Embedding model (optional, default: `text-embedding-3-small`)
+- `--chunking-strategy` - Chunking strategy (default: `class_metadata`)
+- `--max-chunk-size` - Maximum chunk size in characters (default: `1000`)
+- `--enforce-chunk-size` - Enforce chunk size limits (default: `True`)
+- `--chunk-overlap-size` - Overlap size for sliding_window strategy (default: `50`)
+- `--batch-size` - Batch size for embedding generation (default: `100`)
+- `--n-jobs` - Number of parallel jobs for file processing (-1 = all CPUs, default: `-1`)
+- `--checkpoint-file` - Checkpoint file path for resuming (optional)
+- `--resume` - Resume from checkpoint if available
+
+### 2. Query to HTML Report
+
+Query OpenSearch and generate HTML report:
+
+```bash
+cd etl_pipelines/scripts
+
+python standalone_query_to_html_independent.py \
+  --query "getUser method" \
+  --opensearch-host localhost:9200 \
+  --opensearch-index code_chunks \
+  --output-file report.html \
+  --top-k 10
+```
+
+**Arguments**:
+- `--query` - Search query string (required)
+- `--opensearch-host` - OpenSearch host (required, e.g., `localhost:9200`)
+- `--opensearch-index` - OpenSearch index name (required)
+- `--output-file` - Output HTML file (default: `query_report.html`)
+- `--top-k` - Number of top results (default: `10`)
+- `--include-code` - Include code snippets in report (default: `true`)
+- `--include-embeddings` - Include embedding vectors (default: `false`)
+
+## Chunking Strategies
+
+Available strategies:
+
+1. **`method_only`** - Only method-level chunks (smallest, best precision)
+2. **`class_metadata`** - Method chunks + class metadata (recommended)
+3. **`recursive`** - Recursively splits large methods/classes
+4. **`sliding_window`** - Overlapping windows for large classes
+5. **`hybrid`** - Method + class metadata + file chunks
+
+See `../backend/CHUNKING_STRATEGIES.md` for detailed comparison.
+
+## Dependencies
+
+### Core Dependencies (Required)
+
+- `tree-sitter` - Multi-language code parsing
+- `tree-sitter-python` - Python parsing
+- `tree-sitter-java` - Java parsing
+- `tree-sitter-javascript` - JavaScript/TypeScript parsing
+- `tree-sitter-go` - Go parsing
+- `tree-sitter-rust` - Rust parsing
+- `networkx` - Graph operations
+
+### Advanced ETL Features (Phase 1 & 2 - Recommended)
+
+- `tqdm` - Progress bars for long-running operations
+- `joblib` - Parallel file processing (2-10x faster for large repos)
+- `pydantic` - Data validation for chunks
+- `pandas` - Statistics and analytics
+
+### Optional Dependencies
+
+- `openai` - For generating embeddings (optional)
+- `opensearch-py` - For OpenSearch indexing/querying (optional)
+
+## Output Files
+
+### Repository Indexing
+
+- **`chunks.json`** - Generated chunks with metadata
+- **`graph.pkl`** - NetworkX graph (pickle format)
+
+### Query Reports
+
+- **`report.html`** - HTML report with Mermaid graphs
+
+## Environment Variables
+
+```bash
+export OPENAI_API_KEY=sk-...  # For embeddings
+export OPENSEARCH_HOST=localhost:9200  # For OpenSearch
+```
+
+## Examples
+
+### Example 1: Generate Chunks for Single File
+
+```bash
+cd etl_pipelines/scripts
+
+python standalone_build_repo_independent.py \
+  --file ./UserService.java \
+  --output user_service_chunks.json \
+  --chunking-strategy class_metadata \
+  --max-chunk-size 1000
+```
+
+### Example 2: Index Full Repository
+
+```bash
+cd etl_pipelines/scripts
+
+python standalone_build_repo_independent.py \
+  --repo-path ~/projects/my-java-app \
+  --output-dir ./my-app-index \
+  --opensearch-host localhost:9200 \
+  --opensearch-index my_app_chunks \
+  --openai-api-key sk-... \
+  --chunking-strategy class_metadata
+```
+
+### Example 3: Query and Generate Report
+
+```bash
+cd etl_pipelines/scripts
+
+python standalone_query_to_html_independent.py \
+  --query "authentication method" \
+  --opensearch-host localhost:9200 \
+  --opensearch-index my_app_chunks \
+  --output-file auth_report.html \
+  --top-k 10
+```
+
+### Example 4: Complete Workflow
+
+```bash
+# Step 1: Index repository
+cd etl_pipelines/scripts
+python standalone_build_repo_independent.py \
+  --repo-path ~/projects/my-app \
+  --output-dir ./my-app-index \
+  --opensearch-host localhost:9200 \
+  --opensearch-index my_app_chunks \
+  --openai-api-key sk-... \
+  --chunking-strategy class_metadata \
+  --batch-size 100 \
+  --n-jobs -1 \
+  --resume
+
+# Step 2: Query and generate report
+python standalone_query_to_html_independent.py \
+  --query "getUser method" \
+  --opensearch-host localhost:9200 \
+  --opensearch-index my_app_chunks \
+  --output-file report.html
+```
+
+### Example 5: Resume Interrupted Processing
+
+```bash
+# If processing is interrupted, resume from checkpoint
+python standalone_build_repo_independent.py \
+  --repo-path ~/projects/my-app \
+  --output-dir ./my-app-index \
+  --checkpoint-file ./my-app-index/checkpoint.json \
+  --resume \
+  --openai-api-key sk-...
+```
+
+### Example 6: Parallel Processing for Large Repository
+
+```bash
+# Use all CPU cores for faster processing
+python standalone_build_repo_independent.py \
+  --repo-path ~/projects/large-app \
+  --output-dir ./large-app-index \
+  --n-jobs -1 \
+  --batch-size 200 \
+  --openai-api-key sk-...
+```
+
+## Troubleshooting
+
+### Issue: "TreeSitter not available"
+
+```bash
+pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript
+```
+
+### Issue: "OpenSearch connection failed"
+
+1. Verify OpenSearch is running:
+   ```bash
+   curl http://localhost:9200
+   ```
+
+2. Check host format (no protocol):
+   ```bash
+   --opensearch-host localhost:9200  # Correct
+   --opensearch-host http://localhost:9200  # Wrong
+   ```
+
+### Issue: "No chunks generated"
+
+**Possible Causes**:
+1. Repository path is incorrect
+2. No code files found (check file extensions)
+3. Parser failed to parse files
+
+**Solution**:
+```bash
+# Verify repository path
+ls /path/to/repository
+
+# Check for code files
+find /path/to/repository -name "*.java" -o -name "*.py" | head -10
+```
+
+### Issue: "OpenAI API key not provided"
+
+Embeddings are optional. If you don't need embeddings, simply omit the `--openai-api-key` argument. Chunks will be generated without embeddings.
+
+## Advanced ETL Features
+
+The scripts now include advanced ETL features for improved performance and user experience:
+
+### Phase 1: Quick Wins (Implemented)
+
+✅ **tqdm** - Progress bars for file processing and embedding generation
+- Visual progress indicators
+- ETA (estimated time remaining)
+- Processing speed metrics
+
+✅ **Batch Embedding Generation** - Efficient API usage
+- Processes embeddings in batches (default: 100)
+- Reduces API rate limit issues
+- Faster overall processing
+
+✅ **Basic Checkpointing** - Resume interrupted processing
+- Saves progress periodically
+- Resume from checkpoint with `--resume` flag
+- Prevents data loss on interruption
+
+### Phase 2: Performance Improvements (Implemented)
+
+✅ **joblib** - Parallel file processing
+- Processes multiple files simultaneously
+- Configurable number of parallel jobs (`--n-jobs`)
+- 2-10x faster for large repositories
+
+✅ **pydantic** - Data validation
+- Validates chunk structure and types
+- Ensures data quality
+- Better error messages
+
+✅ **pandas** - Statistics and analytics
+- Chunk size distribution
+- Language distribution
+- File-level statistics
+- Data quality metrics
+
+### Usage
+
+All advanced features are enabled by default when dependencies are installed:
+
+```bash
+# Install all advanced features
+pip install -r requirements.txt
+
+# Features are automatically used:
+# - Progress bars (tqdm)
+# - Parallel processing (joblib)
+# - Data validation (pydantic)
+# - Statistics (pandas)
+# - Batch embeddings (built-in)
+# - Checkpointing (built-in)
+```
+
+### Configuration
+
+```bash
+# Adjust batch size for embeddings
+--batch-size 200  # Larger batches for faster processing
+
+# Control parallel processing
+--n-jobs 4  # Use 4 CPU cores
+--n-jobs -1  # Use all available CPUs (default)
+
+# Enable checkpointing
+--checkpoint-file ./checkpoint.json
+--resume  # Resume from checkpoint
+```
+
+See `ADVANCED_ETL_FEATURES.md` for detailed implementation guide.
+
+## Documentation
+
+For detailed documentation, see:
+- `ADVANCED_ETL_FEATURES.md` - Advanced ETL libraries and features guide
+- `../backend/STANDALONE_SCRIPTS_GUIDE.md` - Comprehensive execution guide (updated paths)
+- `../backend/CHUNKING_STRATEGIES.md` - Chunking strategy details
+- `../backend/CHUNKING_QUICK_REFERENCE.md` - Quick reference
+
+## License
+
+Same as parent project.

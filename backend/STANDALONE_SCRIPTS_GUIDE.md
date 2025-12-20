@@ -4,6 +4,8 @@
 
 This guide explains how to execute the standalone scripts for building repository indexes and generating query reports. These scripts are **completely self-contained** and can run independently without the main application.
 
+**Note**: The standalone scripts have been moved to the `etl_pipelines` directory. See `../etl_pipelines/README.md` for the latest documentation and usage instructions.
+
 ## Table of Contents
 
 1. [Prerequisites](#prerequisites)
@@ -170,11 +172,13 @@ except ImportError:
 
 ## Installation
 
-### Step 1: Clone or Navigate to Repository
+### Step 1: Navigate to ETL Pipelines Directory
 
 ```bash
-cd /path/to/enterprise-chat-ui/backend
+cd /path/to/enterprise-chat-ui/etl_pipelines
 ```
+
+**Note**: The scripts are now located in `etl_pipelines/scripts/` instead of `backend/scripts/`.
 
 ### Step 2: Install Dependencies
 
@@ -193,7 +197,7 @@ python -c "import tree_sitter; import openai; import opensearchpy; import networ
 
 ## Script 1: Build Repository Index
 
-**File**: `scripts/standalone_build_repo_independent.py`
+**File**: `../etl_pipelines/scripts/standalone_build_repo_independent.py`
 
 This script can operate in two modes:
 1. **Single File Mode**: Generate chunks as JSON for a specific file (no database/OpenSearch needed)
@@ -208,7 +212,7 @@ Generate chunks as JSON for a single file without requiring database, OpenSearch
 #### Basic Usage
 
 ```bash
-python scripts/standalone_build_repo_independent.py \
+python etl_pipelines/scripts/standalone_build_repo_independent.py \
   --file /path/to/your/file.java \
   --output chunks.json
 ```
@@ -216,7 +220,7 @@ python scripts/standalone_build_repo_independent.py \
 #### Full Command with All Options
 
 ```bash
-python scripts/standalone_build_repo_independent.py \
+python etl_pipelines/scripts/standalone_build_repo_independent.py \
   --file /path/to/your/file.java \
   --output chunks.json \
   --chunking-strategy class_metadata \
@@ -326,7 +330,7 @@ Parse a repository, generate chunks with embeddings, index to OpenSearch (option
 #### Basic Usage
 
 ```bash
-python scripts/standalone_build_repo_independent.py \
+python etl_pipelines/scripts/standalone_build_repo_independent.py \
   --repo-path /path/to/repository \
   --output-dir ./output
 ```
@@ -334,7 +338,7 @@ python scripts/standalone_build_repo_independent.py \
 #### Full Command with All Options
 
 ```bash
-python scripts/standalone_build_repo_independent.py \
+python etl_pipelines/scripts/standalone_build_repo_independent.py \
   --repo-path /path/to/repository \
   --output-dir ./output \
   --opensearch-host localhost:9200 \
@@ -465,14 +469,14 @@ python scripts/standalone_build_repo_independent.py \
 
 ## Script 2: Query to HTML Report
 
-**File**: `scripts/standalone_query_to_html_independent.py`
+**File**: `../etl_pipelines/scripts/standalone_query_to_html_independent.py`
 
 This script queries OpenSearch chunks and generates an HTML report with Mermaid graph visualization.
 
 ### Basic Usage
 
 ```bash
-python scripts/standalone_query_to_html_independent.py \
+python etl_pipelines/scripts/standalone_query_to_html_independent.py \
   --query "getUser method" \
   --opensearch-host localhost:9200 \
   --opensearch-index code_chunks \
@@ -482,7 +486,7 @@ python scripts/standalone_query_to_html_independent.py \
 ### Full Command with All Options
 
 ```bash
-python scripts/standalone_query_to_html_independent.py \
+python etl_pipelines/scripts/standalone_query_to_html_independent.py \
   --query "getUser method" \
   --opensearch-host localhost:9200 \
   --opensearch-index code_chunks \
@@ -507,7 +511,7 @@ python scripts/standalone_query_to_html_independent.py \
 ### Example: Query for a Method
 
 ```bash
-python scripts/standalone_query_to_html_independent.py \
+python etl_pipelines/scripts/standalone_query_to_html_independent.py \
   --query "UserService getUser method" \
   --opensearch-host localhost:9200 \
   --opensearch-index code_chunks \
@@ -518,7 +522,7 @@ python scripts/standalone_query_to_html_independent.py \
 ### Example: Query for a Class
 
 ```bash
-python scripts/standalone_query_to_html_independent.py \
+python etl_pipelines/scripts/standalone_query_to_html_independent.py \
   --query "UserService class implementation" \
   --opensearch-host localhost:9200 \
   --opensearch-index code_chunks \
