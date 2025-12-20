@@ -40,7 +40,9 @@ etl_pipelines/
 - **Checkpointing** to resume interrupted processing
 - Generate embeddings (optional, requires OpenAI API key)
 - Index to OpenSearch (optional)
-- Build NetworkX knowledge graphs
+- Build NetworkX knowledge graphs (always generated and saved as `.pkl` file)
+- Port graphs to TigerDB/TigerGraph (optional, requires `pyTigerGraph`)
+- **Automatic TigerDB porting**: When Azure embeddings are enabled and TigerGraph host is provided, graph is automatically ported
 - Single file mode: Generate chunks as JSON without indexing
 
 ### 2. `standalone_query_to_html_independent.py`
