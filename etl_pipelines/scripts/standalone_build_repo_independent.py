@@ -496,7 +496,15 @@ class StandaloneIndexer:
                 loop = asyncio.get_event_loop()
                 # Process in batches to avoid memory issues
                 all_embeddings = []
-                for batch in self.azure_embedding_service.chunk_list(texts, self.batch_size):
+                
+                # Create batches for progress tracking
+                batches = list(self.azure_embedding_service.chunk_list(texts, self.batch_size))
+                num_batches = len(batches)
+                
+                # Add progress bar for batch processing
+                batch_iter = tqdm(batches, desc="Generating embeddings (Azure)", unit="batch", total=num_batches) if TQDM_AVAILABLE else batches
+                
+                for batch in batch_iter:
                     # Run synchronous embedding in executor
                     batch_embeddings = await loop.run_in_executor(
                         None, 
@@ -515,8 +523,15 @@ class StandaloneIndexer:
         
         all_embeddings = []
         
+        # Calculate number of batches for progress bar
+        num_batches = (len(texts) + self.batch_size - 1) // self.batch_size
+        
+        # Create progress bar for batch processing
+        batch_range = range(0, len(texts), self.batch_size)
+        batch_iter = tqdm(batch_range, desc="Generating embeddings (OpenAI)", unit="batch", total=num_batches) if TQDM_AVAILABLE else batch_range
+        
         # Process in batches to avoid rate limits
-        for i in range(0, len(texts), self.batch_size):
+        for i in batch_iter:
             batch = texts[i:i + self.batch_size]
             try:
                 response = await self.embedding_client.embeddings.create(
