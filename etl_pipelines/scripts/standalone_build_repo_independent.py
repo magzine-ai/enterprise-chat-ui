@@ -1191,7 +1191,9 @@ class StandaloneOpenSearch:
         use_aws_auth: bool = True,
         region: Optional[str] = None,
         use_ssl: bool = True,
-        verify_certs: bool = True
+        verify_certs: bool = True,
+        application_name: Optional[str] = None,
+        seal_id: Optional[str] = None
     ):
         """
         Initialize OpenSearch client and load configuration.
@@ -1315,6 +1317,8 @@ class StandaloneOpenSearch:
                         "file_path": {"type": "keyword"},
                         "code": {"type": "text"},
                         "summary": {"type": "text"},
+                        "application_name": {"type": "keyword"},
+                        "seal_id": {"type": "keyword"},
                         "embedding": {
                             "type": "knn_vector",
                             "dimension": embedding_dim,
@@ -1349,6 +1353,8 @@ class StandaloneOpenSearch:
                 'file_path': chunk['file_path'],
                 'code': chunk['code'],
                 'summary': chunk.get('summary', ''),
+                'application_name': self.application_name or '',
+                'seal_id': self.seal_id or '',
                 'embedding': chunk['embedding'],
             }
             
@@ -1416,6 +1422,14 @@ class ApplicationServiceExtractor:
                 app_display_name = name.text if name is not None else app_name
                 packaging_type = packaging.text if packaging is not None else 'jar'
                 
+                # Extract sealId from properties
+                seal_id = None
+                properties = root.find('properties')
+                if properties is not None:
+                    seal_id_elem = properties.find('sealId')
+                    if seal_id_elem is not None:
+                        seal_id = seal_id_elem.text
+                
                 # Extract modules if multi-module project
                 modules = root.find('modules')
                 services = []
@@ -1442,7 +1456,8 @@ class ApplicationServiceExtractor:
                         'name': app_name,
                         'display_name': app_display_name,
                         'type': 'java',
-                        'build_system': 'maven'
+                        'build_system': 'maven',
+                        'seal_id': seal_id
                     },
                     'services': services,
                     'deployment_units': [{
