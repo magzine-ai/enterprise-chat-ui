@@ -1302,6 +1302,48 @@ class StandaloneOpenSearch:
             import traceback
             print(traceback.format_exc())
     
+    async def check_connectivity_and_list_indexes(self) -> bool:
+        """
+        Check OpenSearch connectivity and list all available indexes.
+        
+        Returns:
+            bool: True if connection successful, False otherwise
+        """
+        if not self.client:
+            print("⚠️ OpenSearch client not initialized")
+            return False
+        
+        try:
+            # Test connectivity with a simple cluster info call
+            cluster_info = self.client.info()
+            print(f"✅ OpenSearch connectivity verified")
+            print(f"   Cluster: {cluster_info.get('cluster_name', 'unknown')}")
+            print(f"   Version: {cluster_info.get('version', {}).get('number', 'unknown')}")
+            
+            # List all indexes
+            indices = self.client.indices.get_alias(index="*")
+            index_names = sorted(indices.keys())
+            
+            if index_names:
+                # Show indexes in a single line
+                indexes_str = ", ".join(index_names)
+                print(f"   Available indexes ({len(index_names)}): {indexes_str}")
+                
+                # Highlight the target index if it exists
+                if self.index_name in index_names:
+                    print(f"   ✓ Target index '{self.index_name}' exists")
+                else:
+                    print(f"   ⚠ Target index '{self.index_name}' does not exist (will be created)")
+            else:
+                print(f"   No indexes found in cluster")
+            
+            return True
+        except Exception as e:
+            print(f"❌ Failed to connect to OpenSearch: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return False
+    
     async def ensure_index(self, embedding_dim: int = 1536):
         """Ensure index exists with proper mapping."""
         if not self.client:
@@ -2903,6 +2945,7 @@ async def main():
     
     # Index to OpenSearch if configured
     if args.opensearch_host or args.opensearch_config:
+        print("\n🔍 Initializing OpenSearch connection...")
         opensearch = StandaloneOpenSearch(
             host=args.opensearch_host,
             index=args.opensearch_index,
@@ -2914,6 +2957,16 @@ async def main():
             application_name=application_name,
             seal_id=seal_id
         )
+        
+        # Check connectivity and list indexes before proceeding
+        connectivity_ok = await opensearch.check_connectivity_and_list_indexes()
+        if not connectivity_ok:
+            print("❌ OpenSearch connectivity check failed. Exiting.")
+            raise SystemExit("Failed to connect to OpenSearch. Please check your configuration.")
+        
+        print()  # Empty line for readability
+        
+        # Now proceed with indexing
         await opensearch.index_chunks(chunks)
     
     # Extract additional data for rich graph
