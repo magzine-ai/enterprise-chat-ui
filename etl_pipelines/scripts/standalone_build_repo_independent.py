@@ -358,6 +358,7 @@ class StandaloneParser:
             return {
                 'language': language,
                 'file_path': file_path,
+                'file_content': content,  # Store full content for later analysis
                 'functions': self._extract_functions(root, content, language),
                 'classes': self._extract_classes(root, content, language),
                 'imports': self._extract_imports(root, content, language),
@@ -367,43 +368,137 @@ class StandaloneParser:
             return None
     
     def _extract_functions(self, root, content: str, language: str) -> List[Dict[str, Any]]:
-        """Extract function/method definitions."""
+        """Extract function/method definitions with calls."""
         functions = []
         # Simplified extraction - traverse AST for function nodes
-        def traverse(node):
-            if node.type == 'method_declaration' or node.type == 'function_definition':
+        def traverse(node, parent_class: Optional[str] = None):
+            if node.type == 'class_declaration':
+                class_name_node = node.child_by_field_name('name')
+                current_class = content[class_name_node.start_byte:class_name_node.end_byte] if class_name_node else None
+                for child in node.children:
+                    traverse(child, current_class)
+            elif node.type == 'method_declaration' or node.type == 'function_definition':
                 name_node = node.child_by_field_name('name')
                 if name_node:
                     name = content[name_node.start_byte:name_node.end_byte]
+                    method_code = content[node.start_byte:node.end_byte]
+                    calls = self._extract_method_calls(method_code, language)
                     functions.append({
                         'name': name,
+                        'class_name': parent_class,
                         'start_line': node.start_point[0] + 1,
                         'end_line': node.end_point[0] + 1,
-                        'code': content[node.start_byte:node.end_byte]
+                        'code': method_code,
+                        'calls': calls
                     })
+            else:
             for child in node.children:
-                traverse(child)
+                    traverse(child, parent_class)
         
         traverse(root)
         return functions
     
+    def _extract_method_calls(self, code: str, language: str) -> List[str]:
+        """Extract method calls from code."""
+        calls = []
+        if language == 'java':
+            # Pattern: object.method() or Class.method() or method()
+            call_patterns = [
+                r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(',  # obj.method()
+                r'\b([A-Z][a-zA-Z0-9_]*(?:\.[A-Z][a-zA-Z0-9_]*)*)\s*\.\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(',  # Class.method()
+                r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(',  # method() - standalone
+            ]
+            for pattern in call_patterns:
+                matches = re.finditer(pattern, code)
+                for match in matches:
+                    if len(match.groups()) == 2:
+                        # obj.method() or Class.method()
+                        class_or_obj = match.group(1)
+                        method = match.group(2)
+                        call = f"{class_or_obj}.{method}"
+                    else:
+                        # method()
+                        call = match.group(1)
+                    
+                    # Filter out common Java keywords and built-ins
+                    if call and call not in ['if', 'for', 'while', 'switch', 'catch', 'try', 'new', 'return', 'throw']:
+                        if call not in calls:
+                            calls.append(call)
+        elif language in ['python', 'javascript', 'typescript']:
+            # Pattern: obj.method() or function()
+            call_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\('
+            matches = re.finditer(call_pattern, code)
+            for match in matches:
+                call = match.group(1)
+                if call and call not in ['if', 'for', 'while', 'print', 'console', 'return']:
+                    if call not in calls:
+                        calls.append(call)
+        return calls
+    
     def _extract_classes(self, root, content: str, language: str) -> List[Dict[str, Any]]:
-        """Extract class definitions."""
+        """Extract class definitions with relationships."""
         classes = []
         def traverse(node):
             if node.type == 'class_declaration':
                 name_node = node.child_by_field_name('name')
                 if name_node:
                     name = content[name_node.start_byte:name_node.end_byte]
-                    classes.append({
+                    class_info = {
                         'name': name,
                         'start_line': node.start_point[0] + 1,
                         'end_line': node.end_point[0] + 1,
-                    })
+                        'code': content[node.start_byte:node.end_byte],
+                        'extends': [],
+                        'implements': [],
+                        'references': []
+                    }
+                    
+                    # Extract extends (superclass)
+                    superclass_node = node.child_by_field_name('superclass')
+                    if superclass_node:
+                        extends_name = content[superclass_node.start_byte:superclass_node.end_byte].strip()
+                        if extends_name:
+                            class_info['extends'] = [extends_name]
+                    
+                    # Extract implements (interfaces)
+                    interfaces_node = node.child_by_field_name('interfaces')
+                    if interfaces_node:
+                        for child in interfaces_node.children:
+                            if child.type == 'type_identifier' or child.type == 'scoped_type_identifier':
+                                impl_name = content[child.start_byte:child.end_byte].strip()
+                                if impl_name:
+                                    class_info['implements'].append(impl_name)
+                    
+                    # Extract type references from class body (for references relationship)
+                    class_body = content[node.start_byte:node.end_byte]
+                    references = self._extract_type_references(class_body, language)
+                    class_info['references'] = references
+                    
+                    classes.append(class_info)
             for child in node.children:
                 traverse(child)
         traverse(root)
         return classes
+    
+    def _extract_type_references(self, code: str, language: str) -> List[str]:
+        """Extract type references from code (for references relationship)."""
+        references = []
+        if language == 'java':
+            # Extract type identifiers (class names used in code)
+            # Pattern: TypeName variableName or new TypeName()
+            type_patterns = [
+                r'\b([A-Z][a-zA-Z0-9_]*)\s+\w+\s*[=;,\[\]()]',  # Type variable
+                r'new\s+([A-Z][a-zA-Z0-9_]*(?:\.[A-Z][a-zA-Z0-9_]*)*)\s*\(',  # new Type()
+                r'([A-Z][a-zA-Z0-9_]*(?:\.[A-Z][a-zA-Z0-9_]*)*)\s*\.\s*\w+\s*\(',  # Type.method()
+            ]
+            for pattern in type_patterns:
+                matches = re.finditer(pattern, code)
+                for match in matches:
+                    ref = match.group(1)
+                    if ref and ref not in ['String', 'Integer', 'Long', 'Double', 'Float', 'Boolean', 'Byte', 'Short', 'Character']:
+                        if ref not in references:
+                            references.append(ref)
+        return references
     
     def _extract_imports(self, root, content: str, language: str) -> List[str]:
         """Extract import statements."""
@@ -1266,28 +1361,528 @@ class StandaloneOpenSearch:
         print(f"✅ Indexed {len(chunks)} chunks to OpenSearch")
 
 
-class StandaloneGraphBuilder:
-    """Self-contained graph builder using NetworkX."""
+class ApplicationServiceExtractor:
+    """Extract Application and Service information from repository structure and config files."""
     
-    def __init__(self):
+    def __init__(self, repo_path: str):
+        self.repo_path = Path(repo_path)
+        self.application_data = None
+        self.services = []
+        self.deployment_units = []
+    
+    def extract(self) -> Dict[str, Any]:
+        """Extract application, services, and deployment units."""
+        # Try to extract from Maven pom.xml
+        pom_files = list(self.repo_path.rglob('pom.xml'))
+        if pom_files:
+            return self._extract_from_maven(pom_files)
+        
+        # Try to extract from package.json (Node.js)
+        package_files = list(self.repo_path.rglob('package.json'))
+        if package_files:
+            return self._extract_from_nodejs(package_files)
+        
+        # Fallback: infer from directory structure
+        return self._extract_from_structure()
+    
+    def _extract_from_maven(self, pom_files: List[Path]) -> Dict[str, Any]:
+        """Extract from Maven pom.xml files."""
+        import xml.etree.ElementTree as ET
+        
+        root_pom = None
+        for pom_file in pom_files:
+            if 'parent' not in str(pom_file) and pom_file.parent == self.repo_path:
+                root_pom = pom_file
+                break
+        
+        if not root_pom and pom_files:
+            root_pom = pom_files[0]
+        
+        if root_pom:
+            try:
+                tree = ET.parse(root_pom)
+                root = tree.getroot()
+                
+                # Remove namespace
+                for elem in root.iter():
+                    if '}' in elem.tag:
+                        elem.tag = elem.tag.split('}')[1]
+                
+                artifact_id = root.find('artifactId')
+                name = root.find('name')
+                packaging = root.find('packaging')
+                
+                app_name = artifact_id.text if artifact_id is not None else self.repo_path.name
+                app_display_name = name.text if name is not None else app_name
+                packaging_type = packaging.text if packaging is not None else 'jar'
+                
+                # Extract modules if multi-module project
+                modules = root.find('modules')
+                services = []
+                if modules is not None:
+                    for module in modules.findall('module'):
+                        module_name = module.text
+                        module_path = self.repo_path / module_name
+                        if module_path.exists():
+                            services.append({
+                                'name': module_name,
+                                'path': str(module_path),
+                                'type': 'maven-module'
+                            })
+                else:
+                    # Single module - treat as one service
+                    services.append({
+                        'name': app_name,
+                        'path': str(self.repo_path),
+                        'type': 'maven-project'
+                    })
+                
+                return {
+                    'application': {
+                        'name': app_name,
+                        'display_name': app_display_name,
+                        'type': 'java',
+                        'build_system': 'maven'
+                    },
+                    'services': services,
+                    'deployment_units': [{
+                        'name': f"{app_name}.{packaging_type}",
+                        'type': packaging_type,
+                        'service': services[0]['name'] if services else app_name
+                    }]
+                }
+            except Exception as e:
+                print(f"⚠️ Error parsing pom.xml: {e}")
+        
+        return self._extract_from_structure()
+    
+    def _extract_from_nodejs(self, package_files: List[Path]) -> Dict[str, Any]:
+        """Extract from Node.js package.json files."""
+        root_package = None
+        for pkg_file in package_files:
+            if pkg_file.parent == self.repo_path:
+                root_package = pkg_file
+                break
+        
+        if not root_package and package_files:
+            root_package = package_files[0]
+        
+        if root_package:
+            try:
+                with open(root_package, 'r') as f:
+                    package_data = json.load(f)
+                
+                app_name = package_data.get('name', self.repo_path.name)
+                
+                return {
+                    'application': {
+                        'name': app_name,
+                        'display_name': package_data.get('description', app_name),
+                        'type': 'nodejs',
+                        'build_system': 'npm'
+                    },
+                    'services': [{
+                        'name': app_name,
+                        'path': str(self.repo_path),
+                        'type': 'nodejs-service'
+                    }],
+                    'deployment_units': [{
+                        'name': app_name,
+                        'type': 'nodejs',
+                        'service': app_name
+                    }]
+                }
+            except Exception as e:
+                print(f"⚠️ Error parsing package.json: {e}")
+        
+        return self._extract_from_structure()
+    
+    def _extract_from_structure(self) -> Dict[str, Any]:
+        """Infer application and services from directory structure."""
+        app_name = self.repo_path.name
+        
+        # Look for common service directories
+        service_dirs = []
+        for item in self.repo_path.iterdir():
+            if item.is_dir() and not item.name.startswith('.') and item.name not in ['target', 'build', 'node_modules', '__pycache__']:
+                # Check if it contains code files
+                code_files = list(item.rglob('*.java')) + list(item.rglob('*.py')) + list(item.rglob('*.js'))
+                if code_files:
+                    service_dirs.append({
+                        'name': item.name,
+                        'path': str(item),
+                        'type': 'inferred'
+                    })
+        
+        if not service_dirs:
+            # Single service application
+            service_dirs.append({
+                'name': app_name,
+                'path': str(self.repo_path),
+                'type': 'inferred'
+            })
+        
+        return {
+            'application': {
+                'name': app_name,
+                'display_name': app_name,
+                'type': 'unknown',
+                'build_system': 'unknown'
+            },
+            'services': service_dirs,
+            'deployment_units': [{
+                'name': f"{app_name}.unknown",
+                'type': 'unknown',
+                'service': service_dirs[0]['name'] if service_dirs else app_name
+            }]
+        }
+
+
+class ConfigFileParser:
+    """Parse configuration files to extract ConfigArtifacts and ConfigKeys."""
+    
+    def __init__(self, repo_path: str):
+        self.repo_path = Path(repo_path)
+        self.config_artifacts = []
+        self.config_keys = []
+    
+    def extract(self) -> Dict[str, Any]:
+        """Extract configuration artifacts and keys."""
+        # Parse YAML files (application.yml, application-*.yml)
+        yaml_files = list(self.repo_path.rglob('application*.yml')) + list(self.repo_path.rglob('application*.yaml'))
+        for yaml_file in yaml_files:
+            self._parse_yaml_file(yaml_file)
+        
+        # Parse properties files
+        prop_files = list(self.repo_path.rglob('application*.properties'))
+        for prop_file in prop_files:
+            self._parse_properties_file(prop_file)
+        
+        # Parse .env files
+        env_files = list(self.repo_path.rglob('.env*'))
+        for env_file in env_files:
+            self._parse_env_file(env_file)
+        
+        return {
+            'config_artifacts': self.config_artifacts,
+            'config_keys': self.config_keys
+        }
+    
+    def _parse_yaml_file(self, file_path: Path):
+        """Parse YAML configuration file."""
+        try:
+            import yaml
+            with open(file_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            # Extract environment from filename
+            env = 'default'
+            if '-prod' in file_path.name or '-production' in file_path.name:
+                env = 'production'
+            elif '-dev' in file_path.name or '-development' in file_path.name:
+                env = 'development'
+            elif '-test' in file_path.name or '-testing' in file_path.name:
+                env = 'test'
+            
+            artifact = {
+                'name': file_path.name,
+                'path': str(file_path),
+                'type': 'yaml',
+                'environment': env
+            }
+            self.config_artifacts.append(artifact)
+            
+            # Extract keys recursively
+            self._extract_yaml_keys(data, artifact['name'], env, '')
+        except ImportError:
+            print("⚠️ PyYAML not available. Install: pip install pyyaml")
+        except Exception as e:
+            print(f"⚠️ Error parsing YAML file {file_path}: {e}")
+    
+    def _extract_yaml_keys(self, data: Any, artifact_name: str, env: str, prefix: str):
+        """Recursively extract keys from YAML data."""
+        if isinstance(data, dict):
+            for key, value in data.items():
+                full_key = f"{prefix}.{key}" if prefix else key
+                if isinstance(value, (dict, list)):
+                    self._extract_yaml_keys(value, artifact_name, env, full_key)
+                else:
+                    self.config_keys.append({
+                        'key': full_key,
+                        'value': str(value) if value is not None else '',
+                        'artifact': artifact_name,
+                        'environment': env
+                    })
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                self._extract_yaml_keys(item, artifact_name, env, f"{prefix}[{i}]")
+    
+    def _parse_properties_file(self, file_path: Path):
+        """Parse properties configuration file."""
+        try:
+            env = 'default'
+            if '-prod' in file_path.name:
+                env = 'production'
+            elif '-dev' in file_path.name:
+                env = 'development'
+            
+            artifact = {
+                'name': file_path.name,
+                'path': str(file_path),
+                'type': 'properties',
+                'environment': env
+            }
+            self.config_artifacts.append(artifact)
+            
+            with open(file_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        self.config_keys.append({
+                            'key': key.strip(),
+                            'value': value.strip(),
+                            'artifact': artifact['name'],
+                            'environment': env
+                        })
+        except Exception as e:
+            print(f"⚠️ Error parsing properties file {file_path}: {e}")
+    
+    def _parse_env_file(self, file_path: Path):
+        """Parse .env file."""
+        try:
+            artifact = {
+                'name': file_path.name,
+                'path': str(file_path),
+                'type': 'env',
+                'environment': 'default'
+            }
+            self.config_artifacts.append(artifact)
+            
+            with open(file_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        self.config_keys.append({
+                            'key': key.strip(),
+                            'value': value.strip(),
+                            'artifact': artifact['name'],
+                            'environment': 'default'
+                        })
+        except Exception as e:
+            print(f"⚠️ Error parsing .env file {file_path}: {e}")
+
+
+class ExternalResourceExtractor:
+    """Extract external resources from code and configuration."""
+    
+    def __init__(self, repo_path: str):
+        self.repo_path = Path(repo_path)
+        self.resources = []
+    
+    def extract(self, parsed_files: List[Dict[str, Any]], config_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract external resources from code and config."""
+        # Extract from imports and annotations
+        for parsed in parsed_files:
+            self._extract_from_imports(parsed)
+            self._extract_from_code(parsed)
+        
+        # Extract from config files (connection strings)
+        self._extract_from_config(config_data)
+        
+        return self.resources
+    
+    def _extract_from_imports(self, parsed: Dict[str, Any]):
+        """Extract resources from import statements."""
+        imports = parsed.get('imports', [])
+        for imp in imports:
+            # Database
+            if any(db in imp.lower() for db in ['jdbc', 'oracle', 'postgresql', 'mysql', 'mssql', 'hibernate', 'jpa']):
+                resource_type = 'database'
+                if 'oracle' in imp.lower():
+                    name = 'Oracle Database'
+                elif 'postgresql' in imp.lower() or 'postgres' in imp.lower():
+                    name = 'PostgreSQL Database'
+                elif 'mysql' in imp.lower():
+                    name = 'MySQL Database'
+                elif 'mssql' in imp.lower() or 'sqlserver' in imp.lower():
+                    name = 'SQL Server Database'
+                else:
+                    name = 'Database'
+                
+                self._add_resource(name, resource_type, parsed.get('file_path', ''))
+            
+            # Messaging
+            elif any(msg in imp.lower() for msg in ['jms', 'kafka', 'rabbitmq', 'activemq']):
+                resource_type = 'messaging'
+                if 'kafka' in imp.lower():
+                    name = 'Apache Kafka'
+                elif 'rabbitmq' in imp.lower() or 'rabbit' in imp.lower():
+                    name = 'RabbitMQ'
+                elif 'activemq' in imp.lower():
+                    name = 'ActiveMQ'
+                else:
+                    name = 'JMS'
+                
+                self._add_resource(name, resource_type, parsed.get('file_path', ''))
+            
+            # Caching
+            elif any(cache in imp.lower() for cache in ['redis', 'hazelcast', 'gemfire', 'ehcache']):
+                resource_type = 'cache'
+                if 'redis' in imp.lower():
+                    name = 'Redis'
+                elif 'hazelcast' in imp.lower():
+                    name = 'Hazelcast'
+                elif 'gemfire' in imp.lower():
+                    name = 'Gemfire'
+                else:
+                    name = 'Cache'
+                
+                self._add_resource(name, resource_type, parsed.get('file_path', ''))
+    
+    def _extract_from_code(self, parsed: Dict[str, Any]):
+        """Extract resources from code annotations and patterns."""
+        content = parsed.get('file_content', '')
+        if not content:
+            return
+        
+        # Check for @Entity, @Table annotations (JPA/Hibernate)
+        if re.search(r'@Entity|@Table', content):
+            self._add_resource('Database (JPA)', 'database', parsed.get('file_path', ''))
+        
+        # Check for @JmsListener, @KafkaListener
+        if re.search(r'@JmsListener|@KafkaListener', content):
+            if '@KafkaListener' in content:
+                self._add_resource('Apache Kafka', 'messaging', parsed.get('file_path', ''))
+            else:
+                self._add_resource('JMS', 'messaging', parsed.get('file_path', ''))
+    
+    def _extract_from_config(self, config_data: Dict[str, Any]):
+        """Extract resources from configuration connection strings."""
+        config_keys = config_data.get('config_keys', [])
+        for key_data in config_keys:
+            key = key_data.get('key', '').lower()
+            value = key_data.get('value', '')
+            
+            # JDBC URLs
+            if 'jdbc' in key or 'jdbc' in value.lower():
+                if 'oracle' in value.lower():
+                    self._add_resource('Oracle Database', 'database', key_data.get('artifact', ''))
+                elif 'postgresql' in value.lower() or 'postgres' in value.lower():
+                    self._add_resource('PostgreSQL Database', 'database', key_data.get('artifact', ''))
+                elif 'mysql' in value.lower():
+                    self._add_resource('MySQL Database', 'database', key_data.get('artifact', ''))
+            
+            # Messaging URLs
+            if 'kafka' in key or 'kafka' in value.lower():
+                self._add_resource('Apache Kafka', 'messaging', key_data.get('artifact', ''))
+            elif 'rabbitmq' in key or 'rabbitmq' in value.lower():
+                self._add_resource('RabbitMQ', 'messaging', key_data.get('artifact', ''))
+            elif 'jms' in key:
+                self._add_resource('JMS', 'messaging', key_data.get('artifact', ''))
+            
+            # Cache URLs
+            if 'redis' in key or 'redis' in value.lower():
+                self._add_resource('Redis', 'cache', key_data.get('artifact', ''))
+            elif 'gemfire' in key or 'gemfire' in value.lower():
+                self._add_resource('Gemfire', 'cache', key_data.get('artifact', ''))
+    
+    def _add_resource(self, name: str, resource_type: str, source: str):
+        """Add resource if not already present."""
+        for res in self.resources:
+            if res['name'] == name and res['type'] == resource_type:
+                return
+        
+        self.resources.append({
+            'name': name,
+            'type': resource_type,
+            'source': source
+        })
+
+
+class StandaloneGraphBuilder:
+    """Self-contained graph builder using NetworkX with rich schema."""
+    
+    def __init__(self, use_rich_graph: bool = True):
         self.graph = None
+        self.use_rich_graph = use_rich_graph
         if NETWORKX_AVAILABLE:
             self.graph = nx.MultiDiGraph()
             print("✅ NetworkX graph initialized")
     
-    def build_graph(self, chunks: List[Dict[str, Any]]):
-        """Build graph from chunks."""
+    def build_graph(
+        self,
+        chunks: List[Dict[str, Any]],
+        application_data: Optional[Dict[str, Any]] = None,
+        config_data: Optional[Dict[str, Any]] = None,
+        external_resources: Optional[List[Dict[str, Any]]] = None,
+        parsed_files: Optional[List[Dict[str, Any]]] = None
+    ):
+        """
+        Build graph from chunks with rich schema support.
+        
+        Args:
+            chunks: List of code chunks
+            application_data: Application, service, and deployment unit data
+            config_data: Configuration artifacts and keys
+            external_resources: External resources (databases, messaging, etc.)
+            parsed_files: Parsed file data with relationships
+        """
         if not self.graph:
             print("⚠️ NetworkX not available")
             return
         
+        if not self.use_rich_graph:
+            # Fallback to simple graph
+            self._build_simple_graph(chunks)
+            return
+        
+        # Build rich graph
+        print("📊 Building rich knowledge graph...")
+        
+        # 1. Add Application and Service nodes
+        if application_data:
+            self._add_application_nodes(application_data)
+        
+        # 2. Add File nodes
+        file_nodes = self._add_file_nodes(chunks, parsed_files)
+        
+        # 3. Add Class nodes
+        class_nodes = self._add_class_nodes(chunks, parsed_files)
+        
+        # 4. Add Method nodes
+        method_nodes = self._add_method_nodes(chunks, parsed_files)
+        
+        # 5. Add Config nodes
+        if config_data:
+            self._add_config_nodes(config_data)
+        
+        # 6. Add External Resource nodes
+        if external_resources:
+            self._add_external_resource_nodes(external_resources)
+        
+        # 7. Add Environment nodes
+        if config_data:
+            self._add_environment_nodes(config_data)
+        
+        # 8. Add relationships
+        self._add_relationships(
+            chunks, application_data, config_data, external_resources,
+            parsed_files, file_nodes, class_nodes, method_nodes
+        )
+        
+        print(f"✅ Rich graph built: {self.graph.number_of_nodes()} nodes, {self.graph.number_of_edges()} edges")
+    
+    def _build_simple_graph(self, chunks: List[Dict[str, Any]]):
+        """Build simple graph (backward compatibility)."""
         # Add nodes using chunk_id
         for chunk in chunks:
             if 'chunk_id' not in chunk:
                 continue
             
             self.graph.add_node(
-                chunk['chunk_id'],  # Use chunk_id as node ID
+                chunk['chunk_id'],
                 type=chunk['type'],
                 fqn=chunk['fqn'],
                 file_path=chunk['file_path'],
@@ -1304,15 +1899,397 @@ class StandaloneGraphBuilder:
                 if 'chunk_id' not in chunk2 or chunk1['chunk_id'] == chunk2['chunk_id']:
                     continue
                 
-                # Same file = related
                 if chunk1['file_path'] == chunk2['file_path']:
                     self.graph.add_edge(
-                        chunk1['chunk_id'],  # Use chunk_id
-                        chunk2['chunk_id'],  # Use chunk_id
-                        relationship='in_file'
+                        chunk1['chunk_id'],
+                        chunk2['chunk_id'],
+                        relationship='IN_FILE'
                     )
+    
+    def _add_application_nodes(self, application_data: Dict[str, Any]):
+        """Add Application and Service nodes."""
+        app_info = application_data.get('application', {})
+        app_id = f"app_{app_info.get('name', 'unknown')}"
         
-        print(f"✅ Graph built: {self.graph.number_of_nodes()} nodes, {self.graph.number_of_edges()} edges")
+        self.graph.add_node(
+            app_id,
+            entity_type='Application',
+            name=app_info.get('name', 'unknown'),
+            display_name=app_info.get('display_name', 'unknown'),
+            type=app_info.get('type', 'unknown'),
+            build_system=app_info.get('build_system', 'unknown')
+        )
+        
+        # Add Services
+        for service in application_data.get('services', []):
+            service_id = f"service_{service.get('name', 'unknown')}"
+            self.graph.add_node(
+                service_id,
+                entity_type='Service',
+                name=service.get('name', 'unknown'),
+                path=service.get('path', ''),
+                type=service.get('type', 'unknown')
+            )
+            # Application OWNS Service
+            self.graph.add_edge(app_id, service_id, relationship='OWNS')
+        
+        # Add DeploymentUnits
+        for du in application_data.get('deployment_units', []):
+            du_id = f"du_{du.get('name', 'unknown')}"
+            self.graph.add_node(
+                du_id,
+                entity_type='DeploymentUnit',
+                name=du.get('name', 'unknown'),
+                type=du.get('type', 'unknown'),
+                service=du.get('service', 'unknown')
+            )
+            # Application DEPLOYED_AS DeploymentUnit
+            self.graph.add_edge(app_id, du_id, relationship='DEPLOYED_AS')
+    
+    def _add_file_nodes(self, chunks: List[Dict[str, Any]], parsed_files: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
+        """Add File nodes and return mapping of file_path -> node_id."""
+        file_nodes = {}
+        seen_files = set()
+        
+        for chunk in chunks:
+            file_path = chunk.get('file_path', '')
+            if file_path and file_path not in seen_files:
+                file_id = f"file_{hashlib.sha256(file_path.encode()).hexdigest()[:16]}"
+                self.graph.add_node(
+                    file_id,
+                    entity_type='File',
+                    file_path=file_path,
+                    name=Path(file_path).name
+                )
+                file_nodes[file_path] = file_id
+                seen_files.add(file_path)
+        
+        return file_nodes
+    
+    def _add_class_nodes(self, chunks: List[Dict[str, Any]], parsed_files: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
+        """Add Class nodes and return mapping of class_name -> node_id."""
+        class_nodes = {}
+        seen_classes = set()
+        
+        # Get class info from parsed files
+        class_info_map = {}
+        if parsed_files:
+            for parsed in parsed_files:
+                for cls in parsed.get('classes', []):
+                    class_name = cls.get('name', '')
+                    file_path = parsed.get('file_path', '')
+                    if class_name and file_path:
+                        key = f"{file_path}::{class_name}"
+                        if key not in class_info_map:
+                            class_info_map[key] = cls
+        
+        # Add class nodes from chunks
+        for chunk in chunks:
+            if chunk.get('type') == 'class':
+                fqn = chunk.get('fqn', '')
+                file_path = chunk.get('file_path', '')
+                class_name = fqn.split('.')[-1] if '.' in fqn else fqn
+                
+                key = f"{file_path}::{class_name}"
+                if key not in seen_classes:
+                    class_id = f"class_{hashlib.sha256(key.encode()).hexdigest()[:16]}"
+                    class_info = class_info_map.get(key, {})
+                    
+                    self.graph.add_node(
+                        class_id,
+                        entity_type='JavaClass',
+                        name=class_name,
+                        fqn=fqn,
+                        file_path=file_path,
+                        start_line=chunk.get('start_line', 1),
+                        end_line=chunk.get('end_line', 1),
+                        language=chunk.get('language', 'unknown')
+                    )
+                    class_nodes[key] = class_id
+                    seen_classes.add(key)
+        
+        return class_nodes
+    
+    def _add_method_nodes(self, chunks: List[Dict[str, Any]], parsed_files: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
+        """Add Method nodes and return mapping of method_signature -> node_id."""
+        method_nodes = {}
+        seen_methods = set()
+        
+        # Get method info from parsed files
+        method_info_map = {}
+        if parsed_files:
+            for parsed in parsed_files:
+                for func in parsed.get('functions', []):
+                    method_name = func.get('name', '')
+                    class_name = func.get('class_name', '')
+                    file_path = parsed.get('file_path', '')
+                    if method_name and file_path:
+                        key = f"{file_path}::{class_name}::{method_name}"
+                        if key not in method_info_map:
+                            method_info_map[key] = func
+        
+        # Add method nodes from chunks
+        for chunk in chunks:
+            if chunk.get('type') == 'method':
+                fqn = chunk.get('fqn', '')
+                file_path = chunk.get('file_path', '')
+                method_name = fqn.split('.')[-1] if '.' in fqn else fqn
+                class_name = '.'.join(fqn.split('.')[:-1]) if '.' in fqn else ''
+                
+                key = f"{file_path}::{class_name}::{method_name}"
+                if key not in seen_methods:
+                    method_id = f"method_{hashlib.sha256(key.encode()).hexdigest()[:16]}"
+                    method_info = method_info_map.get(key, {})
+                    
+                    self.graph.add_node(
+                        method_id,
+                        entity_type='Method',
+                        name=method_name,
+                        fqn=fqn,
+                        class_name=class_name,
+                        file_path=file_path,
+                        start_line=chunk.get('start_line', 1),
+                        end_line=chunk.get('end_line', 1),
+                        language=chunk.get('language', 'unknown')
+                    )
+                    method_nodes[key] = method_id
+                    seen_methods.add(key)
+        
+        return method_nodes
+    
+    def _add_config_nodes(self, config_data: Dict[str, Any]):
+        """Add ConfigArtifact and ConfigKey nodes."""
+        # Add ConfigArtifacts
+        for artifact in config_data.get('config_artifacts', []):
+            artifact_id = f"config_{hashlib.sha256(artifact.get('path', '').encode()).hexdigest()[:16]}"
+            self.graph.add_node(
+                artifact_id,
+                entity_type='ConfigArtifact',
+                name=artifact.get('name', 'unknown'),
+                path=artifact.get('path', ''),
+                type=artifact.get('type', 'unknown'),
+                environment=artifact.get('environment', 'default')
+            )
+        
+        # Add ConfigKeys
+        for key_data in config_data.get('config_keys', []):
+            key_id = f"key_{hashlib.sha256(key_data.get('key', '').encode()).hexdigest()[:16]}"
+            self.graph.add_node(
+                key_id,
+                entity_type='ConfigKey',
+                key=key_data.get('key', 'unknown'),
+                value=key_data.get('value', ''),
+                artifact=key_data.get('artifact', ''),
+                environment=key_data.get('environment', 'default')
+            )
+    
+    def _add_external_resource_nodes(self, external_resources: List[Dict[str, Any]]):
+        """Add ExternalResource nodes."""
+        for resource in external_resources:
+            resource_id = f"resource_{hashlib.sha256(resource.get('name', '').encode()).hexdigest()[:16]}"
+            self.graph.add_node(
+                resource_id,
+                entity_type='ExternalResource',
+                name=resource.get('name', 'unknown'),
+                type=resource.get('type', 'unknown'),
+                source=resource.get('source', '')
+            )
+    
+    def _add_environment_nodes(self, config_data: Dict[str, Any]):
+        """Add Environment nodes."""
+        environments = set()
+        for artifact in config_data.get('config_artifacts', []):
+            env = artifact.get('environment', 'default')
+            environments.add(env)
+        
+        for env in environments:
+            env_id = f"env_{env}"
+            self.graph.add_node(
+                env_id,
+                entity_type='Environment',
+                name=env
+            )
+    
+    def _add_relationships(
+        self,
+        chunks: List[Dict[str, Any]],
+        application_data: Optional[Dict[str, Any]],
+        config_data: Optional[Dict[str, Any]],
+        external_resources: Optional[List[Dict[str, Any]]],
+        parsed_files: Optional[List[Dict[str, Any]]],
+        file_nodes: Dict[str, str],
+        class_nodes: Dict[str, str],
+        method_nodes: Dict[str, str]
+    ):
+        """Add all relationship edges."""
+        # Service CONTAINS File
+        if application_data:
+            for service in application_data.get('services', []):
+                service_id = f"service_{service.get('name', 'unknown')}"
+                service_path = service.get('path', '')
+                for file_path, file_id in file_nodes.items():
+                    if file_path.startswith(service_path):
+                        self.graph.add_edge(service_id, file_id, relationship='CONTAINS')
+        
+        # File DECLARES Class
+        for file_path, file_id in file_nodes.items():
+            for key, class_id in class_nodes.items():
+                if key.startswith(file_path + "::"):
+                    self.graph.add_edge(file_id, class_id, relationship='DECLARES')
+        
+        # Class DECLARES_METHOD Method
+        for key, class_id in class_nodes.items():
+            file_path, class_name = key.split("::", 1)
+            for method_key, method_id in method_nodes.items():
+                if method_key.startswith(f"{file_path}::{class_name}::"):
+                    self.graph.add_edge(class_id, method_id, relationship='DECLARES_METHOD')
+        
+        # Class EXTENDS, IMPLEMENTS, REFERENCES
+        if parsed_files:
+            for parsed in parsed_files:
+                for cls in parsed.get('classes', []):
+                    class_name = cls.get('name', '')
+                    file_path = parsed.get('file_path', '')
+                    key = f"{file_path}::{class_name}"
+                    class_id = class_nodes.get(key)
+                    
+                    if class_id:
+                        # EXTENDS
+                        for extends_name in cls.get('extends', []):
+                            # Try to find target class
+                            target_class_id = self._find_class_by_name(extends_name, class_nodes, parsed_files)
+                            if target_class_id:
+                                self.graph.add_edge(class_id, target_class_id, relationship='EXTENDS')
+                        
+                        # IMPLEMENTS
+                        for impl_name in cls.get('implements', []):
+                            target_class_id = self._find_class_by_name(impl_name, class_nodes, parsed_files)
+                            if target_class_id:
+                                self.graph.add_edge(class_id, target_class_id, relationship='IMPLEMENTS')
+                        
+                        # REFERENCES
+                        for ref_name in cls.get('references', []):
+                            target_class_id = self._find_class_by_name(ref_name, class_nodes, parsed_files)
+                            if target_class_id and target_class_id != class_id:
+                                self.graph.add_edge(class_id, target_class_id, relationship='REFERENCES')
+        
+        # Method CALLS Method
+        if parsed_files:
+            for parsed in parsed_files:
+                for func in parsed.get('functions', []):
+                    method_name = func.get('name', '')
+                    class_name = func.get('class_name', '')
+                    file_path = parsed.get('file_path', '')
+                    key = f"{file_path}::{class_name}::{method_name}"
+                    method_id = method_nodes.get(key)
+                    
+                    if method_id:
+                        for call in func.get('calls', []):
+                            # Try to find target method
+                            target_method_id = self._find_method_by_call(call, method_nodes, parsed_files)
+                            if target_method_id:
+                                self.graph.add_edge(method_id, target_method_id, relationship='CALLS')
+        
+        # Method USES_RESOURCE ExternalResource
+        if external_resources and parsed_files:
+            for resource in external_resources:
+                resource_id = f"resource_{hashlib.sha256(resource.get('name', '').encode()).hexdigest()[:16]}"
+                source_file = resource.get('source', '')
+                
+                # Find methods in the source file
+                for method_key, method_id in method_nodes.items():
+                    if method_key.startswith(source_file + "::"):
+                        self.graph.add_edge(method_id, resource_id, relationship='USES_RESOURCE')
+        
+        # ConfigArtifact DEFINES_KEY ConfigKey
+        if config_data:
+            for artifact in config_data.get('config_artifacts', []):
+                artifact_id = f"config_{hashlib.sha256(artifact.get('path', '').encode()).hexdigest()[:16]}"
+                artifact_name = artifact.get('name', '')
+                
+                for key_data in config_data.get('config_keys', []):
+                    if key_data.get('artifact') == artifact_name:
+                        key_id = f"key_{hashlib.sha256(key_data.get('key', '').encode()).hexdigest()[:16]}"
+                        self.graph.add_edge(artifact_id, key_id, relationship='DEFINES_KEY')
+                        
+                        # ConfigKey OVERRIDES_IN_ENV Environment
+                        env = key_data.get('environment', 'default')
+                        env_id = f"env_{env}"
+                        if env_id in self.graph.nodes():
+                            self.graph.add_edge(key_id, env_id, relationship='OVERRIDES_IN_ENV')
+        
+        # DeploymentUnit CONFIGURED_BY ConfigArtifact
+        if application_data and config_data:
+            for du in application_data.get('deployment_units', []):
+                du_id = f"du_{du.get('name', 'unknown')}"
+                # Link to main config artifact (simplified)
+                for artifact in config_data.get('config_artifacts', []):
+                    if 'application' in artifact.get('name', '').lower():
+                        artifact_id = f"config_{hashlib.sha256(artifact.get('path', '').encode()).hexdigest()[:16]}"
+                        self.graph.add_edge(du_id, artifact_id, relationship='CONFIGURED_BY')
+                        break
+        
+        # Class/Method USES_CONFIG ConfigArtifact (simplified - based on file proximity)
+        if config_data:
+            for artifact in config_data.get('config_artifacts', []):
+                artifact_id = f"config_{hashlib.sha256(artifact.get('path', '').encode()).hexdigest()[:16]}"
+                artifact_path = Path(artifact.get('path', ''))
+                
+                # Link classes in same directory or parent
+                for key, class_id in class_nodes.items():
+                    file_path = key.split("::")[0]
+                    if artifact_path.parent in Path(file_path).parents or artifact_path.parent == Path(file_path).parent:
+                        self.graph.add_edge(class_id, artifact_id, relationship='USES_CONFIG')
+                
+                # Link methods similarly
+                for method_key, method_id in method_nodes.items():
+                    file_path = method_key.split("::")[0]
+                    if artifact_path.parent in Path(file_path).parents or artifact_path.parent == Path(file_path).parent:
+                        self.graph.add_edge(method_id, artifact_id, relationship='USES_CONFIG_METHOD')
+        
+        # Method REFERENCES_KEY ConfigKey (simplified - based on config key usage in code)
+        if config_data and parsed_files:
+            for key_data in config_data.get('config_keys', []):
+                key_name = key_data.get('key', '').split('.')[-1]  # Last part of key
+                key_id = f"key_{hashlib.sha256(key_data.get('key', '').encode()).hexdigest()[:16]}"
+                
+                # Search for key usage in method code
+                for parsed in parsed_files:
+                    for func in parsed.get('functions', []):
+                        method_name = func.get('name', '')
+                        class_name = func.get('class_name', '')
+                        file_path = parsed.get('file_path', '')
+                        key = f"{file_path}::{class_name}::{method_name}"
+                        method_id = method_nodes.get(key)
+                        
+                        if method_id and key_name.lower() in func.get('code', '').lower():
+                            self.graph.add_edge(method_id, key_id, relationship='REFERENCES_KEY')
+    
+    def _find_class_by_name(self, class_name: str, class_nodes: Dict[str, str], parsed_files: List[Dict[str, Any]]) -> Optional[str]:
+        """Find class node ID by name."""
+        # Try exact match first
+        for key, class_id in class_nodes.items():
+            if key.endswith(f"::{class_name}"):
+                return class_id
+        
+        # Try partial match
+        for key, class_id in class_nodes.items():
+            if class_name in key:
+                return class_id
+        
+        return None
+    
+    def _find_method_by_call(self, call: str, method_nodes: Dict[str, str], parsed_files: List[Dict[str, Any]]) -> Optional[str]:
+        """Find method node ID by call signature."""
+        # Extract method name from call (e.g., "obj.method" -> "method")
+        method_name = call.split('.')[-1] if '.' in call else call
+        
+        # Try to find matching method
+        for key, method_id in method_nodes.items():
+            if key.endswith(f"::{method_name}"):
+                return method_id
+        
+        return None
     
     def save_graph(self, output_path: str):
         """Save graph to pickle file."""
@@ -1397,7 +2374,7 @@ class TigerGraphPort:
         else:
             print("⚠️ TigerGraph not available. Install: pip install pyTigerGraph")
     
-    def ensure_schema(self):
+    def ensure_schema(self, use_rich_schema: bool = True):
         """Ensure TigerGraph schema exists (create if not)."""
         if not self.conn:
             return False
@@ -1412,116 +2389,334 @@ class TigerGraphPort:
             # Create schema if it doesn't exist
             print(f"📝 Creating graph schema '{self.graphname}'...")
             
-            # Create vertex type
-            self.conn.gsql(f"""
-                CREATE VERTEX CodeChunk (
-                    PRIMARY_ID chunk_id STRING,
-                    fqn STRING,
-                    type STRING,
-                    file_path STRING,
-                    start_line INT,
-                    end_line INT,
-                    code TEXT,
-                    summary STRING,
-                    language STRING
-                )
-            """)
-            
-            # Create edge types
-            self.conn.gsql(f"""
-                CREATE DIRECTED EDGE IN_FILE (
-                    FROM CodeChunk,
-                    TO CodeChunk,
-                    relationship STRING
-                )
-            """)
-            
-            # Create graph
-            self.conn.gsql(f"""
-                CREATE GRAPH {self.graphname} (
-                    CodeChunk,
-                    IN_FILE
-                )
-            """)
+            if use_rich_schema:
+                # Create rich schema with all entity types
+                # Vertex types
+                vertex_types = [
+                    ("Application", "PRIMARY_ID app_id STRING, name STRING, display_name STRING, type STRING, build_system STRING"),
+                    ("Service", "PRIMARY_ID service_id STRING, name STRING, path STRING, type STRING"),
+                    ("File", "PRIMARY_ID file_id STRING, file_path STRING, name STRING"),
+                    ("JavaClass", "PRIMARY_ID class_id STRING, name STRING, fqn STRING, file_path STRING, start_line INT, end_line INT, language STRING"),
+                    ("Method", "PRIMARY_ID method_id STRING, name STRING, fqn STRING, class_name STRING, file_path STRING, start_line INT, end_line INT, language STRING"),
+                    ("ConfigArtifact", "PRIMARY_ID artifact_id STRING, name STRING, path STRING, type STRING, environment STRING"),
+                    ("ConfigKey", "PRIMARY_ID key_id STRING, key STRING, value STRING, artifact STRING, environment STRING"),
+                    ("Environment", "PRIMARY_ID env_id STRING, name STRING"),
+                    ("ExternalResource", "PRIMARY_ID resource_id STRING, name STRING, type STRING, source STRING"),
+                    ("DeploymentUnit", "PRIMARY_ID du_id STRING, name STRING, type STRING, service STRING")
+                ]
+                
+                for vertex_name, vertex_def in vertex_types:
+                    try:
+                        self.conn.gsql(f"CREATE VERTEX {vertex_name} ({vertex_def})")
+                    except Exception as e:
+                        print(f"⚠️ Error creating vertex {vertex_name}: {e}")
+                
+                # Edge types
+                edge_types = [
+                    ("DEPLOYED_AS", "Application", "DeploymentUnit", "relationship STRING"),
+                    ("OWNS", "Application", "Service", "relationship STRING"),
+                    ("CONTAINS", "Service", "File", "relationship STRING"),
+                    ("DECLARES", "File", "JavaClass", "relationship STRING"),
+                    ("EXTENDS", "JavaClass", "JavaClass", "relationship STRING"),
+                    ("IMPLEMENTS", "JavaClass", "JavaClass", "relationship STRING"),
+                    ("REFERENCES", "JavaClass", "JavaClass", "relationship STRING"),
+                    ("DECLARES_METHOD", "JavaClass", "Method", "relationship STRING"),
+                    ("CALLS", "Method", "Method", "relationship STRING"),
+                    ("USES_CONFIG", "JavaClass", "ConfigArtifact", "relationship STRING"),
+                    ("USES_CONFIG_METHOD", "Method", "ConfigArtifact", "relationship STRING"),
+                    ("REFERENCES_KEY", "Method", "ConfigKey", "relationship STRING"),
+                    ("DEFINES_KEY", "ConfigArtifact", "ConfigKey", "relationship STRING"),
+                    ("OVERRIDES_IN_ENV", "ConfigKey", "Environment", "relationship STRING"),
+                    ("CONFIGURED_BY", "DeploymentUnit", "ConfigArtifact", "relationship STRING"),
+                    ("USES_RESOURCE", "Method", "ExternalResource", "relationship STRING")
+                ]
+                
+                for edge_name, from_vertex, to_vertex, attrs in edge_types:
+                    try:
+                        self.conn.gsql(f"""
+                            CREATE DIRECTED EDGE {edge_name} (
+                                FROM {from_vertex},
+                                TO {to_vertex},
+                                {attrs}
+                            )
+                        """)
+                    except Exception as e:
+                        print(f"⚠️ Error creating edge {edge_name}: {e}")
+                
+                # Create graph with all vertices and edges
+                all_vertices = ", ".join([v[0] for v in vertex_types])
+                all_edges = ", ".join([e[0] for e in edge_types])
+                
+                self.conn.gsql(f"""
+                    CREATE GRAPH {self.graphname} (
+                        {all_vertices},
+                        {all_edges}
+                    )
+                """)
+            else:
+                # Simple schema (backward compatibility)
+                self.conn.gsql(f"""
+                    CREATE VERTEX CodeChunk (
+                        PRIMARY_ID chunk_id STRING,
+                        fqn STRING,
+                        type STRING,
+                        file_path STRING,
+                        start_line INT,
+                        end_line INT,
+                        code TEXT,
+                        summary STRING,
+                        language STRING
+                    )
+                """)
+                
+                self.conn.gsql(f"""
+                    CREATE DIRECTED EDGE IN_FILE (
+                        FROM CodeChunk,
+                        TO CodeChunk,
+                        relationship STRING
+                    )
+                """)
+                
+                self.conn.gsql(f"""
+                    CREATE GRAPH {self.graphname} (
+                        CodeChunk,
+                        IN_FILE
+                    )
+                """)
             
             print(f"✅ Created graph schema '{self.graphname}'")
             return True
         except Exception as e:
             print(f"⚠️ Error ensuring schema: {e}")
+            import traceback
+            print(traceback.format_exc())
             return False
     
-    def port_from_networkx(self, nx_graph, chunks: Optional[List[Dict[str, Any]]] = None):
+    def port_from_networkx(self, nx_graph, chunks: Optional[List[Dict[str, Any]]] = None, use_rich_schema: bool = True):
         """
         Port NetworkX graph to TigerDB.
         
         Args:
             nx_graph: NetworkX graph object
             chunks: Optional list of chunks for additional metadata
+            use_rich_schema: Whether to use rich schema (default: True)
         """
         if not self.conn:
             print("⚠️ TigerGraph connection not available")
             return False
         
-        if not self.ensure_schema():
+        if not self.ensure_schema(use_rich_schema=use_rich_schema):
             return False
         
         try:
-            # Prepare vertices (nodes)
-            vertices = []
-            for node_id, node_data in nx_graph.nodes(data=True):
-                vertex = {
-                    "chunk_id": node_id,
-                    "fqn": node_data.get('fqn', ''),
-                    "type": node_data.get('type', ''),
-                    "file_path": node_data.get('file_path', ''),
-                    "start_line": node_data.get('start_line', 1),
-                    "end_line": node_data.get('end_line', 1),
-                    "code": "",  # Don't store full code in TigerDB
-                    "summary": "",  # Can be added from chunks if provided
-                    "language": node_data.get('language', 'unknown')
-                }
-                
-                # Add summary from chunks if available
-                if chunks:
-                    for chunk in chunks:
-                        if chunk.get('chunk_id') == node_id:
-                            vertex['summary'] = chunk.get('summary', '')
-                            break
-                
-                vertices.append(vertex)
-            
-            # Prepare edges
-            edges = []
-            for source, target, edge_data in nx_graph.edges(data=True):
-                edge = {
-                    "source": source,
-                    "target": target,
-                    "relationship": edge_data.get('relationship', 'in_file')
-                }
-                edges.append(edge)
-            
-            # Upload vertices
-            print(f"📤 Uploading {len(vertices)} vertices to TigerDB...")
-            self.conn.upsertVertex("CodeChunk", vertices)
-            print(f"✅ Uploaded {len(vertices)} vertices")
-            
-            # Upload edges
-            print(f"📤 Uploading {len(edges)} edges to TigerDB...")
-            for edge in edges:
-                self.conn.upsertEdge(
-                    "CodeChunk", edge['source'], "IN_FILE",
-                    "CodeChunk", edge['target'],
-                    {"relationship": edge['relationship']}
-                )
-            print(f"✅ Uploaded {len(edges)} edges")
-            
-            print(f"✅ Successfully ported graph to TigerDB: {len(vertices)} nodes, {len(edges)} edges")
-            return True
+            if use_rich_schema:
+                # Port rich schema graph
+                return self._port_rich_schema(nx_graph, chunks)
+            else:
+                # Port simple schema graph (backward compatibility)
+                return self._port_simple_schema(nx_graph, chunks)
         except Exception as e:
             print(f"⚠️ Error porting graph to TigerDB: {e}")
             import traceback
             print(traceback.format_exc())
             return False
+    
+    def _port_rich_schema(self, nx_graph, chunks: Optional[List[Dict[str, Any]]]):
+        """Port rich schema graph to TigerDB."""
+        # Group vertices by entity type
+        vertices_by_type = {}
+        for node_id, node_data in nx_graph.nodes(data=True):
+            entity_type = node_data.get('entity_type', 'CodeChunk')
+            if entity_type not in vertices_by_type:
+                vertices_by_type[entity_type] = []
+            
+            # Prepare vertex based on entity type
+            vertex = {"id": node_id}
+            
+            if entity_type == 'Application':
+                vertex.update({
+                    "app_id": node_id,
+                    "name": node_data.get('name', ''),
+                    "display_name": node_data.get('display_name', ''),
+                    "type": node_data.get('type', ''),
+                    "build_system": node_data.get('build_system', '')
+                })
+            elif entity_type == 'Service':
+                vertex.update({
+                    "service_id": node_id,
+                    "name": node_data.get('name', ''),
+                    "path": node_data.get('path', ''),
+                    "type": node_data.get('type', '')
+                })
+            elif entity_type == 'File':
+                vertex.update({
+                    "file_id": node_id,
+                    "file_path": node_data.get('file_path', ''),
+                    "name": node_data.get('name', '')
+                })
+            elif entity_type == 'JavaClass':
+                vertex.update({
+                    "class_id": node_id,
+                    "name": node_data.get('name', ''),
+                    "fqn": node_data.get('fqn', ''),
+                    "file_path": node_data.get('file_path', ''),
+                    "start_line": node_data.get('start_line', 1),
+                    "end_line": node_data.get('end_line', 1),
+                    "language": node_data.get('language', 'unknown')
+                })
+            elif entity_type == 'Method':
+                vertex.update({
+                    "method_id": node_id,
+                    "name": node_data.get('name', ''),
+                    "fqn": node_data.get('fqn', ''),
+                    "class_name": node_data.get('class_name', ''),
+                    "file_path": node_data.get('file_path', ''),
+                    "start_line": node_data.get('start_line', 1),
+                    "end_line": node_data.get('end_line', 1),
+                    "language": node_data.get('language', 'unknown')
+                })
+            elif entity_type == 'ConfigArtifact':
+                vertex.update({
+                    "artifact_id": node_id,
+                    "name": node_data.get('name', ''),
+                    "path": node_data.get('path', ''),
+                    "type": node_data.get('type', ''),
+                    "environment": node_data.get('environment', 'default')
+                })
+            elif entity_type == 'ConfigKey':
+                vertex.update({
+                    "key_id": node_id,
+                    "key": node_data.get('key', ''),
+                    "value": node_data.get('value', ''),
+                    "artifact": node_data.get('artifact', ''),
+                    "environment": node_data.get('environment', 'default')
+                })
+            elif entity_type == 'Environment':
+                vertex.update({
+                    "env_id": node_id,
+                    "name": node_data.get('name', 'default')
+                })
+            elif entity_type == 'ExternalResource':
+                vertex.update({
+                    "resource_id": node_id,
+                    "name": node_data.get('name', ''),
+                    "type": node_data.get('type', ''),
+                    "source": node_data.get('source', '')
+                })
+            elif entity_type == 'DeploymentUnit':
+                vertex.update({
+                    "du_id": node_id,
+                    "name": node_data.get('name', ''),
+                    "type": node_data.get('type', ''),
+                    "service": node_data.get('service', '')
+                })
+            
+            vertices_by_type[entity_type].append(vertex)
+        
+        # Upload vertices by type
+        total_vertices = 0
+        for entity_type, vertices in vertices_by_type.items():
+            if vertices:
+                print(f"📤 Uploading {len(vertices)} {entity_type} vertices...")
+                try:
+                    self.conn.upsertVertex(entity_type, vertices)
+                    total_vertices += len(vertices)
+                    print(f"✅ Uploaded {len(vertices)} {entity_type} vertices")
+                except Exception as e:
+                    print(f"⚠️ Error uploading {entity_type} vertices: {e}")
+        
+        # Upload edges
+        edges_by_type = {}
+        for source, target, edge_data in nx_graph.edges(data=True):
+            relationship = edge_data.get('relationship', 'UNKNOWN')
+            source_type = nx_graph.nodes[source].get('entity_type', 'CodeChunk')
+            target_type = nx_graph.nodes[target].get('entity_type', 'CodeChunk')
+            
+            edge_key = f"{relationship}_{source_type}_{target_type}"
+            if edge_key not in edges_by_type:
+                edges_by_type[edge_key] = []
+            
+            edges_by_type[edge_key].append({
+                "source": source,
+                "target": target,
+                "relationship": relationship,
+                "source_type": source_type,
+                "target_type": target_type
+            })
+        
+        total_edges = 0
+        for edge_key, edges in edges_by_type.items():
+            if edges:
+                relationship = edges[0]['relationship']
+                source_type = edges[0]['source_type']
+                target_type = edges[0]['target_type']
+                
+                print(f"📤 Uploading {len(edges)} {relationship} edges...")
+                try:
+                    for edge in edges:
+                        self.conn.upsertEdge(
+                            source_type, edge['source'], relationship,
+                            target_type, edge['target'],
+                            {"relationship": relationship}
+                        )
+                    total_edges += len(edges)
+                    print(f"✅ Uploaded {len(edges)} {relationship} edges")
+                except Exception as e:
+                    print(f"⚠️ Error uploading {relationship} edges: {e}")
+        
+        print(f"✅ Successfully ported rich graph to TigerDB: {total_vertices} nodes, {total_edges} edges")
+        return True
+    
+    def _port_simple_schema(self, nx_graph, chunks: Optional[List[Dict[str, Any]]]):
+        """Port simple schema graph to TigerDB (backward compatibility)."""
+        # Prepare vertices (nodes)
+        vertices = []
+        for node_id, node_data in nx_graph.nodes(data=True):
+            vertex = {
+                "chunk_id": node_id,
+                "fqn": node_data.get('fqn', ''),
+                "type": node_data.get('type', ''),
+                "file_path": node_data.get('file_path', ''),
+                "start_line": node_data.get('start_line', 1),
+                "end_line": node_data.get('end_line', 1),
+                "code": "",
+                "summary": "",
+                "language": node_data.get('language', 'unknown')
+            }
+            
+            if chunks:
+                for chunk in chunks:
+                    if chunk.get('chunk_id') == node_id:
+                        vertex['summary'] = chunk.get('summary', '')
+                        break
+            
+            vertices.append(vertex)
+        
+        # Upload vertices
+        print(f"📤 Uploading {len(vertices)} vertices to TigerDB...")
+        self.conn.upsertVertex("CodeChunk", vertices)
+        print(f"✅ Uploaded {len(vertices)} vertices")
+        
+        # Upload edges
+        edges = []
+        for source, target, edge_data in nx_graph.edges(data=True):
+            edges.append({
+                "source": source,
+                "target": target,
+                "relationship": edge_data.get('relationship', 'IN_FILE')
+            })
+        
+        print(f"📤 Uploading {len(edges)} edges to TigerDB...")
+        for edge in edges:
+            self.conn.upsertEdge(
+                "CodeChunk", edge['source'], "IN_FILE",
+                "CodeChunk", edge['target'],
+                {"relationship": edge['relationship']}
+            )
+        print(f"✅ Uploaded {len(edges)} edges")
+        
+        print(f"✅ Successfully ported simple graph to TigerDB: {len(vertices)} nodes, {len(edges)} edges")
+        return True
     
     def port_from_file(self, graph_file: str, chunks_file: Optional[str] = None):
         """
@@ -1701,6 +2896,8 @@ async def main():
     parser.add_argument("--tigergraph-secret", help="TigerGraph secret (for cloud instances)")
     parser.add_argument("--port-to-tigergraph", action="store_true", help="Port NetworkX graph to TigerDB after building")
     parser.add_argument("--port-graph-file", help="Port existing NetworkX graph file to TigerDB (requires --tigergraph-host)")
+    parser.add_argument("--use-rich-graph", action="store_true", default=True, help="Use rich graph schema with Application, Service, Config, etc. (default: True)")
+    parser.add_argument("--use-simple-graph", action="store_false", dest="use_rich_graph", help="Use simple graph schema (backward compatibility)")
     
     # Common arguments
     parser.add_argument(
@@ -1811,9 +3008,45 @@ async def main():
         )
         await opensearch.index_chunks(chunks)
     
-    # Build graph (always generate graph, especially when Azure embeddings are enabled)
-    graph_builder = StandaloneGraphBuilder()
-    graph_builder.build_graph(chunks)
+    # Extract additional data for rich graph
+    application_data = None
+    config_data = None
+    external_resources = []
+    parsed_files = []
+    
+    use_rich_graph = getattr(args, 'use_rich_graph', True)
+    
+    if use_rich_graph:
+        print("\n📊 Extracting application and service information...")
+        app_extractor = ApplicationServiceExtractor(args.repo_path)
+        application_data = app_extractor.extract()
+        
+        print("📊 Extracting configuration data...")
+        config_parser = ConfigFileParser(args.repo_path)
+        config_data = config_parser.extract()
+        
+        print("📊 Collecting parsed file data...")
+        # Re-parse files to get relationship data
+        parser = StandaloneParser()
+        code_files = indexer.find_code_files(args.repo_path)
+        for file_path in code_files[:1000]:  # Limit to avoid memory issues
+            parsed = parser.parse_file(file_path)
+            if parsed:
+                parsed_files.append(parsed)
+        
+        print("📊 Extracting external resources...")
+        resource_extractor = ExternalResourceExtractor(args.repo_path)
+        external_resources = resource_extractor.extract(parsed_files, config_data)
+    
+    # Build graph (rich graph if enabled, otherwise simple)
+    graph_builder = StandaloneGraphBuilder(use_rich_graph=use_rich_graph)
+    graph_builder.build_graph(
+        chunks=chunks,
+        application_data=application_data,
+        config_data=config_data,
+        external_resources=external_resources,
+        parsed_files=parsed_files
+    )
     
     # Save graph
     graph_file = output_dir / "graph.pkl"
@@ -1834,7 +3067,7 @@ async def main():
             secret=args.tigergraph_secret,
             use_ssl=True
         )
-        tigergraph.port_from_networkx(graph_builder.graph, chunks)
+        tigergraph.port_from_networkx(graph_builder.graph, chunks, use_rich_schema=use_rich_graph)
     
     print(f"\n✅ Complete! Stats: {stats}")
 
