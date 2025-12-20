@@ -110,6 +110,44 @@ python standalone_build_repo_independent.py \
   --chunking-strategy class_metadata
 ```
 
+#### AWS OpenSearch with Authentication
+
+For AWS OpenSearch, you can use either command-line arguments or a config file:
+
+**Using Command-Line Arguments:**
+```bash
+python standalone_build_repo_independent.py \
+  --repo-path /path/to/repository \
+  --output-dir ./output \
+  --opensearch-host search-domain.us-east-1.es.amazonaws.com \
+  --opensearch-index code_chunks \
+  --opensearch-region us-east-1 \
+  --opensearch-use-aws-auth \
+  --openai-api-key sk-...
+```
+
+**Using Config File (config.ini):**
+```bash
+python standalone_build_repo_independent.py \
+  --repo-path /path/to/repository \
+  --output-dir ./output \
+  --opensearch-config /path/to/config.ini \
+  --opensearch-use-aws-auth \
+  --openai-api-key sk-...
+```
+
+**Config File Format (config.ini):**
+```ini
+[aws_info]
+opensearch_endpoint = search-domain.us-east-1.es.amazonaws.com
+index_name = code_chunks
+region = us-east-1
+```
+
+**Note**: For AWS authentication, ensure you have:
+- AWS credentials configured (via `~/.aws/credentials`, environment variables, or IAM role)
+- `aws-requests-auth` and `boto3` installed: `pip install aws-requests-auth boto3`
+
 **Arguments**:
 - `--file` - Path to single file (single file mode)
 - `--output` - Output JSON file (single file mode, default: `chunks.json`)
