@@ -69,3 +69,6 @@ pandas>=2.0.0  # Analyze chunk statistics and data quality metrics
 # Workflow Orchestration (Advanced)
 # prefect>=2.14.0  # Orchestrate complex ETL pipelines with retries and scheduling
 
+# 3D Graph Visualization (Optional)
+plotly>=5.18.0  # For interactive 3D graph visualization
+

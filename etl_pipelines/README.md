@@ -20,7 +20,8 @@ etl_pipelines/
 └── scripts/                           # ETL scripts
     ├── __init__.py
     ├── standalone_build_repo_independent.py      # Repository indexing
-    └── standalone_query_to_html_independent.py   # Query & HTML reports
+    ├── standalone_query_to_html_independent.py   # Query & HTML reports
+    └── visualize_graph_3d.py                     # 3D graph visualization
 ```
 
 ## Scripts
@@ -54,6 +55,57 @@ etl_pipelines/
 - Generate HTML reports with search results
 - Include Mermaid graph visualizations
 - No database or backend required
+
+### 3. `visualize_graph_3d.py`
+
+**Purpose**: Create interactive 3D visualizations of NetworkX knowledge graphs.
+
+**Features**:
+- Interactive 3D graph visualization using Plotly
+- Color-coded nodes by entity type (rich schema)
+- Hover tooltips with node information
+- HTML export for sharing
+- Performance optimization for large graphs (node limiting)
+- Z-axis based on entity type hierarchy
+- Create sample graphs for testing
+
+**Usage**:
+
+```bash
+# Visualize an existing graph
+python visualize_graph_3d.py \
+  --graph-file ./output/graph.pkl \
+  --output graph_3d.html \
+  --max-nodes 500
+
+# Create a sample graph for testing
+python visualize_graph_3d.py --create-sample
+
+# Visualize the sample graph
+python visualize_graph_3d.py \
+  --graph-file sample_graph.pkl \
+  --output sample_graph_3d.html
+```
+
+**Arguments**:
+- `--graph-file` - Path to graph pickle file (required, unless `--create-sample`)
+- `--output` - Output HTML file (default: `graph_3d.html`)
+- `--max-nodes` - Maximum nodes to visualize (default: 500, for performance)
+- `--layout-iterations` - Layout calculation iterations (default: 50)
+- `--create-sample` - Create a sample graph for testing
+- `--sample-file` - Sample graph file path (default: `sample_graph.pkl`)
+
+**3D Visualization in Build Script**:
+
+You can also generate 3D visualizations directly when building the repository:
+
+```bash
+python standalone_build_repo_independent.py \
+  --repo-path /path/to/repo \
+  --output-dir ./output \
+  --visualize-3d \
+  --max-nodes-3d 500
+```
 
 ## Installation
 
@@ -242,6 +294,7 @@ See `../backend/CHUNKING_STRATEGIES.md` for detailed comparison.
 
 - `openai` - For generating embeddings (optional)
 - `opensearch-py` - For OpenSearch indexing/querying (optional)
+- `plotly` - For 3D graph visualization (optional, install: `pip install plotly`)
 
 ## Output Files
 

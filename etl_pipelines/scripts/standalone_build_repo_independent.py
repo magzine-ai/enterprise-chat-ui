@@ -1213,6 +1213,15 @@ class StandaloneOpenSearch:
         self.application_name = application_name
         self.seal_id = seal_id
         
+        # Store AWS auth configuration for token refresh
+        self.use_aws_auth = use_aws_auth
+        self.use_ssl = use_ssl
+        self.verify_certs = verify_certs
+        self.aws_session = None
+        self.aws_host = None
+        self.hostname = None
+        self.port = None
+        
         # Load config
         if config_path is None:
             current_dir = os.path.dirname(__file__)
@@ -1251,54 +1260,42 @@ class StandaloneOpenSearch:
         
         try:
             if use_aws_auth and AWS_AUTH_AVAILABLE:
-                # AWS Auth
-                aws_session = session.Session()
-                credentials = aws_session.get_credentials()
+                # AWS Auth - store session for token refresh
+                self.aws_session = session.Session()
                 
                 # Extract hostname from endpoint (remove protocol and port)
-                aws_host = self.opensearch_endpoint.replace('https://', '').replace('http://', '').split(':')[0]
-                
-                awsauth = AWSRequestsAuth(
-                    credentials=credentials,
-                    aws_host=aws_host,
-                    aws_region=self.region,
-                    aws_service='es'
-                )
+                self.aws_host = self.opensearch_endpoint.replace('https://', '').replace('http://', '').split(':')[0]
                 
                 # Determine port (default 443 for HTTPS)
-                port = 443
+                self.port = 443
                 if ':' in self.opensearch_endpoint:
                     port_part = self.opensearch_endpoint.split(':')[-1].split('/')[0]
                     try:
-                        port = int(port_part)
+                        self.port = int(port_part)
                     except ValueError:
-                        port = 443
+                        self.port = 443
                 
-                hostname = aws_host
+                self.hostname = self.aws_host
                 
-                self.client = OpenSearch(
-                    hosts=[{'host': hostname, 'port': port}],
-                    http_auth=awsauth,
-                    use_ssl=use_ssl,
-                    verify_certs=verify_certs,
-                    connection_class=RequestsHttpConnection
-                )
+                # Initialize with fresh credentials
+                self._refresh_aws_auth()
+                
                 print(f"✅ Connected to AWS OpenSearch: {self.opensearch_endpoint}")
             else:
                 # Basic authentication (for local development)
                 host_parts = self.opensearch_endpoint.replace('https://', '').replace('http://', '').split(':')
-                hostname = host_parts[0]
-                port = int(host_parts[1]) if len(host_parts) > 1 else 9200
+                self.hostname = host_parts[0]
+                self.port = int(host_parts[1]) if len(host_parts) > 1 else 9200
                 
                 self.client = OpenSearch(
-                    hosts=[{'host': hostname, 'port': port}],
+                    hosts=[{'host': self.hostname, 'port': self.port}],
                     use_ssl=use_ssl,
                     verify_certs=verify_certs,
                     connection_class=RequestsHttpConnection
                 )
                 print(f"✅ Connected to OpenSearch: {self.opensearch_endpoint}")
-            except Exception as e:
-                print(f"⚠️ Failed to connect to OpenSearch: {e}")
+        except Exception as e:
+            print(f"⚠️ Failed to connect to OpenSearch: {e}")
             import traceback
             print(traceback.format_exc())
     
@@ -1342,6 +1339,44 @@ class StandaloneOpenSearch:
             print(f"❌ Failed to connect to OpenSearch: {e}")
             import traceback
             print(traceback.format_exc())
+            return False
+    
+    def _refresh_aws_auth(self):
+        """Refresh AWS authentication credentials and update OpenSearch client."""
+        if not self.use_aws_auth or not AWS_AUTH_AVAILABLE or not self.aws_session:
+            return False
+        
+        try:
+            # Get fresh credentials from session
+            credentials = self.aws_session.get_credentials()
+            
+            if not credentials:
+                print("⚠️ Failed to get AWS credentials for refresh")
+                return False
+            
+            # Create new AWS auth with fresh credentials
+            # AWSRequestsAuth expects individual credential components
+            awsauth = AWSRequestsAuth(
+                aws_access_key=credentials.access_key,
+                aws_secret_access_key=credentials.secret_key,
+                aws_token=credentials.token,
+                aws_host=self.aws_host,
+                aws_region=self.region,
+                aws_service='es'
+            )
+            
+            # Recreate OpenSearch client with fresh auth
+            self.client = OpenSearch(
+                hosts=[{'host': self.hostname, 'port': self.port}],
+                http_auth=awsauth,
+                use_ssl=self.use_ssl,
+                verify_certs=self.verify_certs,
+                connection_class=RequestsHttpConnection
+            )
+            
+            return True
+        except Exception as e:
+            print(f"⚠️ Failed to refresh AWS authentication: {e}")
             return False
     
     async def ensure_index(self, embedding_dim: int = 1536):
@@ -1388,10 +1423,22 @@ class StandaloneOpenSearch:
         
         await self.ensure_index()
         
-        for chunk in chunks:
-            if 'embedding' not in chunk or 'chunk_id' not in chunk:
-                continue
-            
+        # Filter chunks that have required fields
+        valid_chunks = [chunk for chunk in chunks if 'embedding' in chunk and 'chunk_id' in chunk]
+        
+        if not valid_chunks:
+            print("⚠️ No valid chunks to index (missing embedding or chunk_id)")
+            return
+        
+        print(f"📊 Indexing {len(valid_chunks)} chunks to OpenSearch...")
+        
+        # Use tqdm for progress bar if available
+        chunk_iter = tqdm(valid_chunks, desc="Indexing to OpenSearch", unit="chunk") if TQDM_AVAILABLE else valid_chunks
+        
+        indexed_count = 0
+        error_count = 0
+        
+        for chunk in chunk_iter:
             doc = {
                 'chunk_id': chunk['chunk_id'],  # Use the chunk's unique ID
                 'type': chunk['type'],
@@ -1404,13 +1451,52 @@ class StandaloneOpenSearch:
                 'embedding': chunk['embedding'],
             }
             
-            try:
-                # Use chunk_id as the document ID for easy retrieval
-                self.client.index(index=self.index_name, id=chunk['chunk_id'], body=doc)
-            except Exception as e:
-                print(f"⚠️ Error indexing chunk {chunk.get('chunk_id', 'unknown')}: {e}")
+            # Retry logic with token refresh
+            max_retries = 2
+            retry_count = 0
+            indexed = False
+            
+            while retry_count <= max_retries and not indexed:
+                try:
+                    # Use chunk_id as the document ID for easy retrieval
+                    self.client.index(index=self.index_name, id=chunk['chunk_id'], body=doc)
+                    indexed_count += 1
+                    indexed = True
+                except Exception as e:
+                    error_str = str(e)
+                    error_type = type(e).__name__
+                    
+                    # Check if it's a token expiration error (403 or AuthorizationException)
+                    is_token_error = (
+                        '403' in error_str or 
+                        'expired' in error_str.lower() or 
+                        'AuthorizationException' in error_type or
+                        'token' in error_str.lower() and 'expired' in error_str.lower()
+                    )
+                    
+                    if is_token_error and retry_count < max_retries and self.use_aws_auth:
+                        # Token expired, refresh and retry
+                        if TQDM_AVAILABLE:
+                            tqdm.write(f"🔄 Token expired, refreshing AWS credentials...")
+                        else:
+                            print(f"🔄 Token expired, refreshing AWS credentials...")
+                        
+                        if self._refresh_aws_auth():
+                            retry_count += 1
+                            continue
+                        else:
+                            # Failed to refresh, break retry loop
+                            break
+                    else:
+                        # Not a token error or max retries reached
+                        error_count += 1
+                        if TQDM_AVAILABLE:
+                            tqdm.write(f"⚠️ Error indexing chunk {chunk.get('chunk_id', 'unknown')}: {e}")
+                        else:
+                            print(f"⚠️ Error indexing chunk {chunk.get('chunk_id', 'unknown')}: {e}")
+                        break
         
-        print(f"✅ Indexed {len(chunks)} chunks to OpenSearch")
+        print(f"✅ Indexed {indexed_count}/{len(valid_chunks)} chunks to OpenSearch" + (f" ({error_count} errors)" if error_count > 0 else ""))
 
 
 class ApplicationServiceExtractor:
@@ -2258,6 +2344,221 @@ class StandaloneGraphBuilder:
         except Exception as e:
             print(f"⚠️ Error loading graph: {e}")
             return False
+    
+    def visualize_3d(self, output_path: Optional[str] = None, max_nodes: int = 500) -> bool:
+        """
+        Create an interactive 3D visualization of the graph using Plotly.
+        
+        Args:
+            output_path: Path to save HTML file (optional, if None, opens in browser)
+            max_nodes: Maximum number of nodes to visualize (for performance)
+        
+        Returns:
+            bool: True if visualization was created successfully
+        """
+        if not self.graph:
+            print("⚠️ No graph available for visualization")
+            return False
+        
+        try:
+            import plotly.graph_objects as go
+            import plotly.express as px
+            PLOTLY_AVAILABLE = True
+        except ImportError:
+            print("⚠️ Plotly not available. Install: pip install plotly")
+            print("   Or use: python visualize_graph_3d.py --graph-file <graph.pkl>")
+            return False
+        
+        # Limit nodes for performance
+        nodes = list(self.graph.nodes(data=True))
+        original_node_count = len(nodes)
+        
+        if len(nodes) > max_nodes:
+            print(f"⚠️ Graph has {len(nodes)} nodes, limiting to {max_nodes} for visualization")
+            # Use nodes with highest degree (most connected)
+            degrees = dict(self.graph.degree())
+            top_nodes = sorted(degrees.items(), key=lambda x: x[1], reverse=True)[:max_nodes]
+            node_set = set([n[0] for n in top_nodes])
+            nodes = [(n, d) for n, d in nodes if n in node_set]
+            # Filter edges to only include selected nodes
+            edges = [(u, v) for u, v in self.graph.edges() if u in node_set and v in node_set]
+            print(f"   Selected {len(nodes)} nodes with highest connectivity")
+        else:
+            edges = list(self.graph.edges())
+        
+        # Calculate 3D layout using spring layout
+        print("📐 Calculating 3D layout...")
+        pos_2d = nx.spring_layout(self.graph, k=1, iterations=50, seed=42)
+        
+        # Convert 2D to 3D by adding a Z coordinate based on node type or degree
+        pos_3d = {}
+        entity_type_map = {}
+        
+        for node, data in nodes:
+            x, y = pos_2d[node]
+            
+            # Z coordinate based on entity type (if rich schema) or degree
+            if self.use_rich_graph and 'entity_type' in data:
+                entity_type = data.get('entity_type', 'CodeChunk')
+                entity_type_map[node] = entity_type
+                
+                # Map entity types to Z coordinates (hierarchical)
+                z_map = {
+                    'Application': 5.0,
+                    'Service': 4.0,
+                    'DeploymentUnit': 3.5,
+                    'File': 3.0,
+                    'JavaClass': 2.0,
+                    'Method': 1.0,
+                    'ConfigArtifact': 2.5,
+                    'ConfigKey': 1.5,
+                    'Environment': 1.8,
+                    'ExternalResource': 2.2,
+                    'CodeChunk': 1.5
+                }
+                z = z_map.get(entity_type, 1.0)
+            else:
+                # Use degree for Z coordinate (normalized)
+                degree = self.graph.degree(node)
+                z = min(degree * 0.1, 3.0)  # Cap at 3.0
+                entity_type_map[node] = 'CodeChunk'
+            
+            pos_3d[node] = (x, y, z)
+        
+        # Prepare edge traces
+        print("🔗 Preparing edge traces...")
+        edge_x = []
+        edge_y = []
+        edge_z = []
+        
+        for u, v in edges:
+            if u in pos_3d and v in pos_3d:
+                x0, y0, z0 = pos_3d[u]
+                x1, y1, z1 = pos_3d[v]
+                edge_x.extend([x0, x1, None])
+                edge_y.extend([y0, y1, None])
+                edge_z.extend([z0, z1, None])
+        
+        edge_trace = go.Scatter3d(
+            x=edge_x, y=edge_y, z=edge_z,
+            line=dict(width=1, color='#888'),
+            hoverinfo='none',
+            mode='lines',
+            name='Edges',
+            showlegend=False
+        )
+        
+        # Prepare node traces (grouped by entity type for rich schema)
+        print("📊 Preparing node traces...")
+        node_traces = []
+        
+        # Group nodes by entity type
+        entity_types = {}
+        for node, data in nodes:
+            entity_type = entity_type_map.get(node, 'CodeChunk')
+            if entity_type not in entity_types:
+                entity_types[entity_type] = []
+            entity_types[entity_type].append((node, data))
+        
+        # Color palette for different entity types
+        colors = px.colors.qualitative.Set3 + px.colors.qualitative.Pastel
+        
+        for i, (entity_type, type_nodes) in enumerate(entity_types.items()):
+            node_x = [pos_3d[n][0] for n, _ in type_nodes]
+            node_y = [pos_3d[n][1] for n, _ in type_nodes]
+            node_z = [pos_3d[n][2] for n, _ in type_nodes]
+            
+            node_text = []
+            node_info = []
+            node_sizes = []
+            
+            for node, data in type_nodes:
+                # Get display name
+                name = data.get('name', data.get('fqn', str(node)))
+                node_text.append(name[:40])  # Truncate for display
+                
+                # Build hover info
+                info = f"<b>{entity_type}</b><br>"
+                info += f"Name: {name}<br>"
+                if 'fqn' in data and data['fqn']:
+                    info += f"FQN: {data['fqn']}<br>"
+                if 'file_path' in data and data['file_path']:
+                    info += f"File: {data['file_path']}<br>"
+                if 'type' in data:
+                    info += f"Type: {data['type']}<br>"
+                info += f"Connections: {self.graph.degree(node)}"
+                node_info.append(info)
+                
+                # Size based on degree
+                degree = self.graph.degree(node)
+                node_sizes.append(max(5, min(degree * 2, 20)))
+            
+            node_traces.append(go.Scatter3d(
+                x=node_x, y=node_y, z=node_z,
+                mode='markers',
+                name=f"{entity_type} ({len(type_nodes)})",
+                marker=dict(
+                    size=node_sizes,
+                    color=colors[i % len(colors)],
+                    line=dict(width=0.5, color='white'),
+                    opacity=0.8
+                ),
+                text=node_text,
+                hovertemplate='%{customdata}<extra></extra>',
+                customdata=node_info
+            ))
+        
+        # Create figure
+        print("🎨 Creating 3D visualization...")
+        fig = go.Figure(data=[edge_trace] + node_traces)
+        
+        # Determine if rich schema
+        is_rich_schema = len(entity_types) > 1
+        
+        fig.update_layout(
+            title=dict(
+                text=f'3D Knowledge Graph Visualization<br><sub>{original_node_count} nodes, {self.graph.number_of_edges()} edges</sub>',
+                x=0.5,
+                xanchor='center'
+            ),
+            scene=dict(
+                xaxis=dict(title='X', backgroundcolor='rgb(240, 240, 240)'),
+                yaxis=dict(title='Y', backgroundcolor='rgb(240, 240, 240)'),
+                zaxis=dict(
+                    title='Z (Entity Type Hierarchy)' if is_rich_schema else 'Z (Node Degree)',
+                    backgroundcolor='rgb(240, 240, 240)'
+                ),
+                bgcolor='rgb(250, 250, 250)',
+                camera=dict(
+                    eye=dict(x=1.5, y=1.5, z=1.5)
+                )
+            ),
+            width=1400,
+            height=900,
+            showlegend=True,
+            hovermode='closest',
+            margin=dict(b=20, l=5, r=5, t=60),
+            legend=dict(
+                x=1.02,
+                y=1,
+                bgcolor='rgba(255, 255, 255, 0.8)',
+                bordercolor='rgba(0, 0, 0, 0.2)',
+                borderwidth=1
+            )
+        )
+        
+        # Save or show
+        if output_path:
+            output_file = Path(output_path)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            fig.write_html(str(output_file))
+            print(f"✅ 3D graph visualization saved to {output_file}")
+            print(f"   Open {output_file} in a web browser to view the interactive 3D graph")
+        else:
+            fig.show()
+            print("✅ 3D graph visualization opened in browser")
+        
+        return True
 
 
 class TigerGraphPort:
@@ -2850,6 +3151,8 @@ async def main():
     parser.add_argument("--n-jobs", type=int, default=-1, help="Number of parallel jobs for file processing (-1 = all CPUs, default: -1)")
     parser.add_argument("--checkpoint-file", help="Checkpoint file path for resuming interrupted processing (optional)")
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint if available")
+    parser.add_argument("--visualize-3d", action="store_true", help="Generate 3D graph visualization (requires plotly)")
+    parser.add_argument("--max-nodes-3d", type=int, default=500, help="Maximum nodes for 3D visualization (default: 500)")
     
     args = parser.parse_args()
     
@@ -3055,6 +3358,12 @@ async def main():
     
     stats = graph_builder.get_stats()
     print(f"\n✅ Graph built and saved: {stats}")
+    
+    # Generate 3D visualization if requested
+    if args.visualize_3d:
+        graph_3d_file = output_dir / "graph_3d.html"
+        print(f"\n🎨 Generating 3D visualization...")
+        graph_builder.visualize_3d(str(graph_3d_file), max_nodes=args.max_nodes_3d)
     
     # Port to TigerDB if configured or if Azure embeddings are enabled
     should_port_to_tiger = (args.port_to_tigergraph and args.tigergraph_host) or (args.use_azure_embeddings and args.tigergraph_host)
