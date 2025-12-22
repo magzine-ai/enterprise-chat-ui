@@ -31,6 +31,7 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # TreeSitter imports
 try:
@@ -1415,8 +1416,101 @@ class StandaloneOpenSearch:
             print(f"❌ Error ensuring index: {e}")
             return False
     
-    async def index_chunks(self, chunks: List[Dict[str, Any]]):
-        """Index chunks to OpenSearch."""
+    def _prepare_bulk_body(self, batch_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Prepare bulk request body for a batch of chunks."""
+        bulk_body = []
+        for chunk in batch_chunks:
+            # Action metadata
+            bulk_body.append({
+                "index": {
+                    "_index": self.index_name,
+                    "_id": chunk['chunk_id']
+                }
+            })
+            
+            # Document
+            bulk_body.append({
+                'chunk_id': chunk['chunk_id'],
+                'type': chunk['type'],
+                'fqn': chunk['fqn'],
+                'file_path': chunk['file_path'],
+                'code': chunk['code'],
+                'summary': chunk.get('summary', ''),
+                'application_name': self.application_name or '',
+                'seal_id': self.seal_id or '',
+                'embedding': chunk['embedding'],
+            })
+        return bulk_body
+    
+    def _index_batch(self, batch_chunks: List[Dict[str, Any]], batch_num: int) -> tuple[int, int, Optional[str]]:
+        """
+        Index a single batch using bulk API.
+        
+        Returns:
+            tuple: (success_count, error_count, error_message)
+        """
+        bulk_body = self._prepare_bulk_body(batch_chunks)
+        
+        max_retries = 2
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                # Execute bulk request
+                response = self.client.bulk(body=bulk_body)
+                
+                # Check for errors in response
+                if response.get('errors'):
+                    errors = [item for item in response['items'] if 'error' in item.get('index', {})]
+                    error_count = len(errors)
+                    success_count = len(batch_chunks) - error_count
+                    
+                    # Log first error if any
+                    error_msg = None
+                    if errors:
+                        first_error = errors[0]['index'].get('error', {})
+                        error_msg = f"Batch {batch_num}: {first_error.get('reason', 'Unknown error')}"
+                    
+                    return success_count, error_count, error_msg
+                else:
+                    # All successful
+                    return len(batch_chunks), 0, None
+                    
+            except Exception as e:
+                error_str = str(e)
+                error_type = type(e).__name__
+                
+                # Check if it's a token expiration error
+                is_token_error = (
+                    '403' in error_str or 
+                    'expired' in error_str.lower() or 
+                    'AuthorizationException' in error_type or
+                    'token' in error_str.lower() and 'expired' in error_str.lower()
+                )
+                
+                if is_token_error and retry_count < max_retries and self.use_aws_auth:
+                    # Token expired, refresh and retry
+                    if self._refresh_aws_auth():
+                        retry_count += 1
+                        continue
+                    else:
+                        # Failed to refresh
+                        return 0, len(batch_chunks), f"Batch {batch_num}: Failed to refresh AWS credentials"
+                else:
+                    # Not a token error or max retries reached
+                    return 0, len(batch_chunks), f"Batch {batch_num}: {error_str}"
+        
+        return 0, len(batch_chunks), f"Batch {batch_num}: Max retries exceeded"
+    
+    async def index_chunks(self, chunks: List[Dict[str, Any]], batch_size: int = 100, max_workers: int = 4):
+        """
+        Index chunks to OpenSearch using bulk API with parallel batch processing.
+        
+        Args:
+            chunks: List of chunks to index
+            batch_size: Number of chunks per batch (default: 100)
+            max_workers: Maximum number of parallel workers (default: 4)
+        """
         if not self.client:
             print("⚠️ OpenSearch not available, skipping indexing")
             return
@@ -1430,73 +1524,70 @@ class StandaloneOpenSearch:
             print("⚠️ No valid chunks to index (missing embedding or chunk_id)")
             return
         
-        print(f"📊 Indexing {len(valid_chunks)} chunks to OpenSearch...")
+        print(f"📊 Indexing {len(valid_chunks)} chunks to OpenSearch using bulk API...")
+        print(f"   Batch size: {batch_size}, Parallel workers: {max_workers}")
         
-        # Use tqdm for progress bar if available
-        chunk_iter = tqdm(valid_chunks, desc="Indexing to OpenSearch", unit="chunk") if TQDM_AVAILABLE else valid_chunks
+        # Create batches
+        batches = [valid_chunks[i:i+batch_size] for i in range(0, len(valid_chunks), batch_size)]
+        total_batches = len(batches)
         
         indexed_count = 0
         error_count = 0
+        error_messages = []
         
-        for chunk in chunk_iter:
-            doc = {
-                'chunk_id': chunk['chunk_id'],  # Use the chunk's unique ID
-                'type': chunk['type'],
-                'fqn': chunk['fqn'],
-                'file_path': chunk['file_path'],
-                'code': chunk['code'],
-                'summary': chunk.get('summary', ''),
-                'application_name': self.application_name or '',
-                'seal_id': self.seal_id or '',
-                'embedding': chunk['embedding'],
-            }
+        # Process batches in parallel
+        if max_workers > 1 and total_batches > 1:
+            # Parallel processing
+            pbar = tqdm(total=total_batches, desc="Indexing batches", unit="batch") if TQDM_AVAILABLE else None
             
-            # Retry logic with token refresh
-            max_retries = 2
-            retry_count = 0
-            indexed = False
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all batches
+                future_to_batch = {
+                    executor.submit(self._index_batch, batches[i], i+1): i 
+                    for i in range(total_batches)
+                }
+                
+                # Process completed batches
+                for future in as_completed(future_to_batch):
+                    batch_idx = future_to_batch[future]
+                    try:
+                        success, errors, error_msg = future.result()
+                        indexed_count += success
+                        error_count += errors
+                        if error_msg:
+                            error_messages.append(error_msg)
+                    except Exception as e:
+                        error_count += len(batches[batch_idx])
+                        error_messages.append(f"Batch {batch_idx+1}: {str(e)}")
+                    
+                    # Update progress bar
+                    if pbar:
+                        pbar.update(1)
             
-            while retry_count <= max_retries and not indexed:
-                try:
-                    # Use chunk_id as the document ID for easy retrieval
-                    self.client.index(index=self.index_name, id=chunk['chunk_id'], body=doc)
-                    indexed_count += 1
-                    indexed = True
-                except Exception as e:
-                    error_str = str(e)
-                    error_type = type(e).__name__
-                    
-                    # Check if it's a token expiration error (403 or AuthorizationException)
-                    is_token_error = (
-                        '403' in error_str or 
-                        'expired' in error_str.lower() or 
-                        'AuthorizationException' in error_type or
-                        'token' in error_str.lower() and 'expired' in error_str.lower()
-                    )
-                    
-                    if is_token_error and retry_count < max_retries and self.use_aws_auth:
-                        # Token expired, refresh and retry
-                        if TQDM_AVAILABLE:
-                            tqdm.write(f"🔄 Token expired, refreshing AWS credentials...")
-                        else:
-                            print(f"🔄 Token expired, refreshing AWS credentials...")
-                        
-                        if self._refresh_aws_auth():
-                            retry_count += 1
-                            continue
-                        else:
-                            # Failed to refresh, break retry loop
-                            break
-                    else:
-                        # Not a token error or max retries reached
-                        error_count += 1
-                        if TQDM_AVAILABLE:
-                            tqdm.write(f"⚠️ Error indexing chunk {chunk.get('chunk_id', 'unknown')}: {e}")
-                        else:
-                            print(f"⚠️ Error indexing chunk {chunk.get('chunk_id', 'unknown')}: {e}")
-                        break
+            if pbar:
+                pbar.close()
+        else:
+            # Sequential processing (for small datasets or single worker)
+            batch_iter = tqdm(batches, desc="Indexing batches", unit="batch") if TQDM_AVAILABLE else batches
+            
+            for batch_num, batch in enumerate(batch_iter, 1):
+                success, errors, error_msg = self._index_batch(batch, batch_num)
+                indexed_count += success
+                error_count += errors
+                if error_msg:
+                    error_messages.append(error_msg)
         
+        # Print summary
         print(f"✅ Indexed {indexed_count}/{len(valid_chunks)} chunks to OpenSearch" + (f" ({error_count} errors)" if error_count > 0 else ""))
+        
+        # Print error details if any
+        if error_messages and len(error_messages) <= 10:
+            for msg in error_messages:
+                print(f"   ⚠️ {msg}")
+        elif error_messages:
+            print(f"   ⚠️ {len(error_messages)} batches had errors (showing first 10):")
+            for msg in error_messages[:10]:
+                print(f"   ⚠️ {msg}")
 
 
 class ApplicationServiceExtractor:
@@ -3115,6 +3206,8 @@ async def main():
     parser.add_argument("--opensearch-region", default="us-east-1", help="AWS region for OpenSearch (default: us-east-1)")
     parser.add_argument("--opensearch-use-ssl", action="store_true", default=True, help="Use SSL for OpenSearch connection (default: True)")
     parser.add_argument("--opensearch-verify-certs", action="store_true", default=True, help="Verify SSL certificates (default: True)")
+    parser.add_argument("--opensearch-batch-size", type=int, default=100, help="Number of chunks per bulk index batch (default: 100)")
+    parser.add_argument("--opensearch-max-workers", type=int, default=4, help="Maximum number of parallel workers for batch indexing (default: 4)")
     parser.add_argument("--application-name", help="Application name (if not provided, will be extracted from pom.xml)")
     parser.add_argument("--seal-id", help="Seal ID (if not provided, will be extracted from pom.xml properties)")
     parser.add_argument("--openai-api-key", help="OpenAI API key for embeddings")
@@ -3310,8 +3403,12 @@ async def main():
         
         print()  # Empty line for readability
         
-        # Now proceed with indexing
-        await opensearch.index_chunks(chunks)
+        # Now proceed with indexing using bulk API with parallel processing
+        await opensearch.index_chunks(
+            chunks,
+            batch_size=args.opensearch_batch_size,
+            max_workers=args.opensearch_max_workers
+        )
     
     # Extract additional data for rich graph
     application_data = None
