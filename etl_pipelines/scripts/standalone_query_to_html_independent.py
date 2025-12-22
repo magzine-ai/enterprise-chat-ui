@@ -221,6 +221,15 @@ class StandaloneSearcher:
         self.embedding_model = embedding_model
         self.use_azure_embeddings = use_azure_embeddings
         
+        # Store AWS auth configuration for token refresh (same as build script)
+        self.use_aws_auth = use_aws_auth
+        self.use_ssl = use_ssl
+        self.verify_certs = verify_certs
+        self.aws_session = None
+        self.aws_host = None
+        self.hostname = None
+        self.port = None
+        
         # Load config
         if config_path is None:
             current_dir = os.path.dirname(__file__)
@@ -230,6 +239,7 @@ class StandaloneSearcher:
             self.config = configparser.ConfigParser()
             self.config.read(config_path)
             print(f"✅ Loaded config from {config_path}")
+            print(f"   Sections found: {self.config.sections()}")
             
             # Extract OpenSearch config from config file
             if 'aws_info' in self.config:
@@ -237,10 +247,12 @@ class StandaloneSearcher:
                 self.index_name = self.config['aws_info'].get('index_name', index or 'code_chunks')
                 self.region = self.config['aws_info'].get('region', region or 'us-east-1')
             else:
+                # Fallback to provided parameters
                 self.opensearch_endpoint = host or ''
                 self.index_name = index or 'code_chunks'
                 self.region = region or 'us-east-1'
         else:
+            # Use provided parameters
             self.opensearch_endpoint = host or ''
             self.index_name = index or 'code_chunks'
             self.region = region or 'us-east-1'
@@ -256,54 +268,35 @@ class StandaloneSearcher:
         
         try:
             if use_aws_auth and AWS_AUTH_AVAILABLE:
-                # AWS Auth - use same pattern as build script
-                aws_session = session.Session()
-                credentials = aws_session.get_credentials()
+                # AWS Auth - store session for token refresh (same as build script)
+                self.aws_session = session.Session()
                 
-                if not credentials:
-                    print("⚠️ Failed to get AWS credentials")
-                    return
+                # Extract hostname from endpoint (remove protocol and port)
+                self.aws_host = self.opensearch_endpoint.replace('https://', '').replace('http://', '').split(':')[0]
                 
-                # Extract hostname from endpoint
-                aws_host = self.opensearch_endpoint.replace('https://', '').replace('http://', '').split(':')[0]
-                
-                # AWSRequestsAuth expects individual credential components
-                awsauth = AWSRequestsAuth(
-                    aws_access_key=credentials.access_key,
-                    aws_secret_access_key=credentials.secret_key,
-                    aws_token=credentials.token,
-                    aws_host=aws_host,
-                    aws_region=self.region,
-                    aws_service='es'
-                )
-                
-                # Determine port
-                port = 443
+                # Determine port (default 443 for HTTPS)
+                self.port = 443
                 if ':' in self.opensearch_endpoint:
                     port_part = self.opensearch_endpoint.split(':')[-1].split('/')[0]
                     try:
-                        port = int(port_part)
+                        self.port = int(port_part)
                     except ValueError:
-                        port = 443
+                        self.port = 443
                 
-                hostname = aws_host
+                self.hostname = self.aws_host
                 
-                self.client = OpenSearch(
-                    hosts=[{'host': hostname, 'port': port}],
-                    http_auth=awsauth,
-                    use_ssl=use_ssl,
-                    verify_certs=verify_certs,
-                    connection_class=RequestsHttpConnection
-                )
+                # Initialize with fresh credentials (same as build script)
+                self._refresh_aws_auth()
+                
                 print(f"✅ Connected to AWS OpenSearch: {self.opensearch_endpoint}")
             else:
                 # Basic authentication (for local development)
                 host_parts = self.opensearch_endpoint.replace('https://', '').replace('http://', '').split(':')
-                hostname = host_parts[0]
-                port = int(host_parts[1]) if len(host_parts) > 1 else 9200
+                self.hostname = host_parts[0]
+                self.port = int(host_parts[1]) if len(host_parts) > 1 else 9200
                 
                 self.client = OpenSearch(
-                    hosts=[{'host': hostname, 'port': port}],
+                    hosts=[{'host': self.hostname, 'port': self.port}],
                     use_ssl=use_ssl,
                     verify_certs=verify_certs,
                     connection_class=RequestsHttpConnection
@@ -331,6 +324,110 @@ class StandaloneSearcher:
         if not use_azure_embeddings and openai_api_key and OPENAI_AVAILABLE:
             self.openai_client = OpenAI(api_key=openai_api_key)
             print("✅ OpenAI client initialized for semantic search")
+    
+    def _refresh_aws_auth(self):
+        """Refresh AWS authentication credentials and update OpenSearch client (same as build script)."""
+        if not self.use_aws_auth or not AWS_AUTH_AVAILABLE or not self.aws_session:
+            return False
+        
+        try:
+            # Get fresh credentials from session
+            credentials = self.aws_session.get_credentials()
+            
+            if not credentials:
+                print("⚠️ Failed to get AWS credentials for refresh")
+                return False
+            
+            # Create new AWS auth with fresh credentials
+            # AWSRequestsAuth expects individual credential components
+            awsauth = AWSRequestsAuth(
+                aws_access_key=credentials.access_key,
+                aws_secret_access_key=credentials.secret_key,
+                aws_token=credentials.token,
+                aws_host=self.aws_host,
+                aws_region=self.region,
+                aws_service='es'
+            )
+            
+            # Recreate OpenSearch client with fresh auth
+            self.client = OpenSearch(
+                hosts=[{'host': self.hostname, 'port': self.port}],
+                http_auth=awsauth,
+                use_ssl=self.use_ssl,
+                verify_certs=self.verify_certs,
+                connection_class=RequestsHttpConnection
+            )
+            
+            return True
+        except Exception as e:
+            print(f"⚠️ Failed to refresh AWS authentication: {e}")
+            return False
+    
+    def verify_index_structure(self) -> bool:
+        """
+        Verify that the index exists and has the expected mapping structure.
+        Expected mapping matches build script:
+        - chunk_id (keyword)
+        - type (keyword)
+        - fqn (keyword)
+        - file_path (keyword)
+        - code (text)
+        - summary (text)
+        - application_name (keyword)
+        - seal_id (keyword)
+        - embedding (knn_vector)
+        
+        Returns:
+            True if index exists and structure is valid, False otherwise
+        """
+        if not self.client:
+            return False
+        
+        try:
+            # Check if index exists
+            if not self.client.indices.exists(index=self.index_name):
+                print(f"⚠️ Index '{self.index_name}' does not exist")
+                return False
+            
+            # Get index mapping
+            mapping = self.client.indices.get_mapping(index=self.index_name)
+            index_mapping = mapping.get(self.index_name, {}).get('mappings', {}).get('properties', {})
+            
+            # Expected fields from build script mapping
+            expected_fields = {
+                'chunk_id': 'keyword',
+                'type': 'keyword',
+                'fqn': 'keyword',
+                'file_path': 'keyword',
+                'code': 'text',
+                'summary': 'text',
+                'application_name': 'keyword',
+                'seal_id': 'keyword',
+                'embedding': 'knn_vector'
+            }
+            
+            # Verify required fields exist
+            missing_fields = []
+            for field, expected_type in expected_fields.items():
+                if field not in index_mapping:
+                    missing_fields.append(field)
+                else:
+                    actual_type = index_mapping[field].get('type', '')
+                    if expected_type == 'knn_vector':
+                        if actual_type != 'knn_vector':
+                            print(f"⚠️ Field '{field}' has type '{actual_type}', expected 'knn_vector'")
+                    elif actual_type != expected_type:
+                        print(f"⚠️ Field '{field}' has type '{actual_type}', expected '{expected_type}'")
+            
+            if missing_fields:
+                print(f"⚠️ Missing required fields in index mapping: {', '.join(missing_fields)}")
+                return False
+            
+            print(f"✅ Index '{self.index_name}' structure verified")
+            return True
+        except Exception as e:
+            print(f"⚠️ Error verifying index structure: {e}")
+            return False
     
     def search(
         self,
@@ -436,10 +533,41 @@ class StandaloneSearcher:
                 }
             
             # Use same pattern as build script - OpenSearch client API
-            response = self.client.search(
-                body=query_body,
-                index=self.index_name
-            )
+            # Add retry logic for token expiration (same as build script)
+            max_retries = 2
+            retry_count = 0
+            
+            while retry_count <= max_retries:
+                try:
+                    response = self.client.search(
+                        body=query_body,
+                        index=self.index_name
+                    )
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    error_str = str(e)
+                    error_type = type(e).__name__
+                    
+                    # Check if it's a token expiration error
+                    is_token_error = (
+                        '403' in error_str or 
+                        'expired' in error_str.lower() or 
+                        'AuthorizationException' in error_type or
+                        'token' in error_str.lower() and 'expired' in error_str.lower()
+                    )
+                    
+                    if is_token_error and retry_count < max_retries and self.use_aws_auth:
+                        # Token expired, refresh and retry
+                        print(f"⚠️ Token expired, refreshing AWS credentials (attempt {retry_count + 1}/{max_retries})...")
+                        if self._refresh_aws_auth():
+                            retry_count += 1
+                            continue
+                        else:
+                            # Failed to refresh
+                            raise Exception(f"Failed to refresh AWS credentials: {error_str}")
+                    else:
+                        # Not a token error or max retries reached
+                        raise
             
             results = []
             for hit in response['hits']['hits']:
@@ -944,6 +1072,12 @@ def main():
         azure_cert_path=args.azure_cert_path,
         azure_config_path=azure_config_path
     )
+    
+    # Verify index structure matches build script mapping
+    if searcher.client:
+        print("\n🔍 Verifying index structure...")
+        searcher.verify_index_structure()
+        print()  # Empty line for readability
     
     results = searcher.search(
         query=args.query,
