@@ -55,25 +55,125 @@ except ImportError:
     OPENAI_AVAILABLE = False
     print("⚠️ OpenAI not available. Install: pip install openai (optional, for semantic search)")
 
+# Azure OpenAI for Embeddings
+try:
+    from azure.identity import CertificateCredential
+    from azure.core.exceptions import ClientAuthenticationError
+    from langchain_openai import AzureOpenAIEmbeddings
+    AZURE_EMBEDDINGS_AVAILABLE = True
+except ImportError:
+    AZURE_EMBEDDINGS_AVAILABLE = False
+    print("⚠️ Azure embeddings not available. Install: pip install azure-identity langchain-openai")
+
 # Azure OpenAI for LLM (chat client)
 try:
     from langchain_openai import AzureChatOpenAI
-    from azure.identity import CertificateCredential
-    from azure.core.exceptions import ClientAuthenticationError
     AZURE_LLM_AVAILABLE = True
 except ImportError:
     AZURE_LLM_AVAILABLE = False
     print("⚠️ Azure LLM not available. Install: pip install langchain-openai azure-identity (optional, for LLM responses)")
 
-# Azure OpenAI for LLM (chat client)
-try:
-    from langchain_openai import AzureChatOpenAI
-    from azure.identity import CertificateCredential
-    from azure.core.exceptions import ClientAuthenticationError
-    AZURE_LLM_AVAILABLE = True
-except ImportError:
-    AZURE_LLM_AVAILABLE = False
-    print("⚠️ Azure LLM not available. Install: pip install langchain-openai azure-identity (optional, for LLM responses)")
+
+class EmbeddingService:
+    """Azure OpenAI Embedding Service with certificate-based authentication."""
+    
+    def __init__(self, user_sid: str = "default_user", cert_path: Optional[str] = None, config_path: Optional[str] = None):
+        """
+        Initialize the embedding service.
+        
+        Args:
+            user_sid: User session ID for multi-tenancy
+            cert_path: Path to certificate file (optional, will try default locations)
+            config_path: Path to config.ini file (optional, defaults to script directory)
+        """
+        self.config = self.load_config(config_path)
+        self.user_sid = user_sid
+        self.access_token = self.get_access_token(cert_path, config_path)
+        if self.access_token:
+            print(f"✅ EmbeddingService access token obtained")
+        self.embeddings = self.create_embeddings_client()
+    
+    @staticmethod
+    def load_config(config_path: Optional[str] = None):
+        """Load configuration from config.ini file."""
+        if config_path is None:
+            current_dir = os.path.dirname(__file__)
+            file_path = os.path.join(current_dir, 'config.ini')
+        else:
+            file_path = config_path
+        
+        print(f"Loading config from {file_path}")
+        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Config file not found: {file_path}")
+        
+        llm_config = configparser.ConfigParser()
+        llm_config.read(file_path)
+        return llm_config
+    
+    @staticmethod
+    def get_access_token(cert_path: Optional[str] = None, config_path: Optional[str] = None):
+        """Obtain access token using certificate-based authentication."""
+        print("Obtaining access token.")
+        config = EmbeddingService.load_config(config_path)
+        current_dir = os.path.dirname(__file__)
+        
+        try:
+            # Certificate path - use provided path or default location
+            if cert_path is None:
+                cert_path = os.path.join(current_dir, "..", "..", "discoveryeng.dev.azure.jpmchase.net.pem")
+            
+            # Try to find certificate if default path doesn't exist
+            if not os.path.exists(cert_path):
+                # Try alternative locations
+                alt_paths = [
+                    os.path.join(current_dir, "discoveryeng.dev.azure.jpmchase.net.pem"),
+                    os.path.join(os.path.dirname(current_dir), "discoveryeng.dev.azure.jpmchase.net.pem"),
+                ]
+                for alt_path in alt_paths:
+                    if os.path.exists(alt_path):
+                        cert_path = alt_path
+                        break
+                else:
+                    raise FileNotFoundError(f"Certificate file not found: {cert_path}")
+            
+            print(f"Certificate path: {cert_path}")
+            
+            credential = CertificateCredential(
+                tenant_id=config['azure_openai']['azure_tenant_id'],
+                client_id=config['azure_openai']['azure_client_id'],
+                certificate_path=cert_path
+            )
+            
+            access_token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+            return access_token
+        except ClientAuthenticationError as e:
+            error_msg = str(e) if hasattr(e, '__str__') else getattr(e, 'message', 'Unknown error')
+            print(f"Authentication failed: {error_msg}")
+            return None
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            return None
+    
+    def create_embeddings_client(self):
+        """Create Azure OpenAI Embeddings client."""
+        if not self.access_token:
+            raise Exception("No access token available for Azure OpenAI Embeddings.")
+        
+        return AzureOpenAIEmbeddings(
+            azure_endpoint="https://llm-multitenancy-exp.jpmchase.net/ver2/",
+            openai_api_version="2024-10-21",
+            openai_api_key="b3d265714de0417cbd8af5c26b6013b1",
+            openai_api_type="azure",
+            default_headers={
+                "Authorization": f"Bearer {self.access_token}",
+                "user_sid": self.user_sid
+            }
+        )
+    
+    def embed_text(self, text: str) -> List[float]:
+        """Embed a single string using AzureOpenAIEmbeddings."""
+        return self.embeddings.embed_query(text)
 
 
 class StandaloneSearcher:
@@ -89,7 +189,11 @@ class StandaloneSearcher:
         use_ssl: bool = True,
         verify_certs: bool = True,
         openai_api_key: Optional[str] = None,
-        embedding_model: str = "text-embedding-3-small"
+        embedding_model: str = "text-embedding-3-small",
+        use_azure_embeddings: bool = False,
+        user_sid: str = "default_user",
+        azure_cert_path: Optional[str] = None,
+        azure_config_path: Optional[str] = None
     ):
         """
         Initialize OpenSearch searcher.
@@ -104,12 +208,18 @@ class StandaloneSearcher:
             verify_certs: Verify SSL certificates (default: True)
             openai_api_key: OpenAI API key for semantic search (optional)
             embedding_model: Embedding model name (default: text-embedding-3-small)
+            use_azure_embeddings: Use Azure OpenAI Embeddings service (default: False)
+            user_sid: User session ID for Azure embeddings (default: default_user)
+            azure_cert_path: Path to Azure certificate file (.pem)
+            azure_config_path: Path to config.ini file for Azure (default: script directory)
         """
         self.host = host
         self.index = index
         self.client = None
         self.openai_client = None
+        self.azure_embedding_service = None
         self.embedding_model = embedding_model
+        self.use_azure_embeddings = use_azure_embeddings
         
         # Load config
         if config_path is None:
@@ -146,15 +256,22 @@ class StandaloneSearcher:
         
         try:
             if use_aws_auth and AWS_AUTH_AVAILABLE:
-                # AWS Auth
+                # AWS Auth - use same pattern as build script
                 aws_session = session.Session()
                 credentials = aws_session.get_credentials()
+                
+                if not credentials:
+                    print("⚠️ Failed to get AWS credentials")
+                    return
                 
                 # Extract hostname from endpoint
                 aws_host = self.opensearch_endpoint.replace('https://', '').replace('http://', '').split(':')[0]
                 
+                # AWSRequestsAuth expects individual credential components
                 awsauth = AWSRequestsAuth(
-                    credentials=credentials,
+                    aws_access_key=credentials.access_key,
+                    aws_secret_access_key=credentials.secret_key,
+                    aws_token=credentials.token,
                     aws_host=aws_host,
                     aws_region=self.region,
                     aws_service='es'
@@ -197,8 +314,21 @@ class StandaloneSearcher:
             import traceback
             print(traceback.format_exc())
         
-        # Initialize OpenAI client for semantic search
-        if openai_api_key and OPENAI_AVAILABLE:
+        # Initialize embedding service (Azure or OpenAI)
+        if use_azure_embeddings and AZURE_EMBEDDINGS_AVAILABLE:
+            try:
+                self.azure_embedding_service = EmbeddingService(
+                    user_sid=user_sid,
+                    cert_path=azure_cert_path,
+                    config_path=azure_config_path
+                )
+                print("✅ Azure OpenAI Embeddings service initialized for semantic search")
+            except Exception as e:
+                print(f"⚠️ Failed to initialize Azure Embeddings service: {e}")
+                print("   Falling back to OpenAI if API key provided")
+                use_azure_embeddings = False
+        
+        if not use_azure_embeddings and openai_api_key and OPENAI_AVAILABLE:
             self.openai_client = OpenAI(api_key=openai_api_key)
             print("✅ OpenAI client initialized for semantic search")
     
@@ -229,14 +359,28 @@ class StandaloneSearcher:
                 "size": top_k,
             }
             
-            if use_semantic and self.openai_client:
-                # Generate embedding for semantic search
+            if use_semantic:
+                # Generate embedding for semantic search (Azure or OpenAI)
+                query_embedding = None
                 try:
-                    response = self.openai_client.embeddings.create(
-                        model=self.embedding_model,
-                        input=query
-                    )
-                    query_embedding = response.data[0].embedding
+                    if self.use_azure_embeddings and self.azure_embedding_service:
+                        # Use Azure embeddings
+                        query_embedding = self.azure_embedding_service.embed_text(query)
+                    elif self.openai_client:
+                        # Use OpenAI embeddings
+                        response = self.openai_client.embeddings.create(
+                            model=self.embedding_model,
+                            input=query
+                        )
+                        query_embedding = response.data[0].embedding
+                    else:
+                        print("⚠️ No embedding service available for semantic search")
+                        use_semantic = False
+                except Exception as e:
+                    print(f"⚠️ Failed to generate embedding: {e}")
+                    use_semantic = False
+                
+                if query_embedding:
                     
                     # Build kNN query
                     knn_query = {
@@ -258,8 +402,7 @@ class StandaloneSearcher:
                     
                     query_body["query"] = {"match_all": {}}
                     query_body["knn"] = knn_query
-                except Exception as e:
-                    print(f"⚠️ Semantic search failed, falling back to text search: {e}")
+                else:
                     use_semantic = False
             
             if not use_semantic:
@@ -414,8 +557,10 @@ class TokenManager:
             config_path = os.path.join(current_dir, "config.ini")
         
         if not os.path.exists(config_path):
+            print(f"⚠️ Config file not found: {config_path}")
             return None
         
+        print(f"Loading config from {config_path}")
         config = configparser.ConfigParser()
         config.read(config_path)
         return config
@@ -423,14 +568,16 @@ class TokenManager:
     def _refresh_token(self):
         """Obtain or refresh access token."""
         if not self.config or 'azure_openai' not in self.config:
+            print("⚠️ Azure OpenAI config not found in config file")
             return None
         
         try:
-            # Find certificate file
+            # Find certificate file - use same pattern as EmbeddingService
             if self.cert_path is None:
                 current_dir = os.path.dirname(__file__)
                 cert_path = os.path.join(current_dir, "..", "..", "discoveryeng.dev.azure.jpmchase.net.pem")
                 
+                # Try to find certificate if default path doesn't exist
                 if not os.path.exists(cert_path):
                     alt_paths = [
                         os.path.join(current_dir, "discoveryeng.dev.azure.jpmchase.net.pem"),
@@ -441,10 +588,17 @@ class TokenManager:
                             cert_path = alt_path
                             break
                     else:
-                        print("⚠️ Certificate file not found")
+                        print(f"⚠️ Certificate file not found. Tried: {cert_path}")
                         return None
             else:
                 cert_path = self.cert_path
+            
+            if not os.path.exists(cert_path):
+                print(f"⚠️ Certificate file not found: {cert_path}")
+                return None
+            
+            print(f"Certificate path: {cert_path}")
+            print("Obtaining access token...")
             
             credential = CertificateCredential(
                 tenant_id=self.config['azure_openai']['azure_tenant_id'],
@@ -453,9 +607,17 @@ class TokenManager:
             )
             
             self.access_token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+            if self.access_token:
+                print("✅ Access token obtained")
             return self.access_token
+        except ClientAuthenticationError as e:
+            error_msg = str(e) if hasattr(e, '__str__') else getattr(e, 'message', 'Unknown error')
+            print(f"⚠️ Authentication failed: {error_msg}")
+            return None
         except Exception as e:
             print(f"⚠️ Failed to obtain access token: {e}")
+            import traceback
+            print(traceback.format_exc())
             return None
     
     def get_token(self) -> Optional[str]:
@@ -515,11 +677,15 @@ class LLMClient:
             return
         
         try:
+            # Use same endpoint and API key pattern as EmbeddingService in build script
+            azure_endpoint = self.config['azure_openai'].get('azure_endpoint', 'https://llm-multitenancy-exp.jpmchase.net/ver2/')
+            openai_api_key = self.config['azure_openai'].get('openai_api_key', 'b3d265714de0417cbd8af5c26b6013b1')
+            
             self.chat_client = AzureChatOpenAI(
-                azure_endpoint=self.config['azure_openai'].get('azure_endpoint', 'https://llm-multitenancy-exp.jpmchase.net/ver2/'),
+                azure_endpoint=azure_endpoint,
                 openai_api_version=self.config['azure_openai'].get('openai_api_version', '2024-10-21'),
                 deployment_name=self.config['azure_openai'].get('deployment_name', 'gpt-4'),
-                openai_api_key=self.config['azure_openai'].get('openai_api_key', ''),
+                openai_api_key=openai_api_key,
                 openai_api_type="azure",
                 max_tokens=int(self.config['azure_openai'].get('max_tokens', '2000')),
                 temperature=float(self.config['azure_openai'].get('temperature', '0.7')),
@@ -532,6 +698,8 @@ class LLMClient:
             print("✅ LLM client initialized")
         except Exception as e:
             print(f"⚠️ Failed to initialize LLM client: {e}")
+            import traceback
+            print(traceback.format_exc())
             self.chat_client = None
     
     def get_chat_client(self):
@@ -701,40 +869,72 @@ def main():
     parser.add_argument("--opensearch-verify-certs", action="store_true", default=True, help="Verify SSL certificates (default: True)")
     parser.add_argument("--application-name", help="Filter results by application name")
     parser.add_argument("--seal-id", help="Filter results by seal ID")
-    parser.add_argument("--openai-api-key", help="OpenAI API key for semantic/vector search")
-    parser.add_argument("--embedding-model", default="text-embedding-3-small", help="Embedding model for semantic search")
-    parser.add_argument("--use-semantic", action="store_true", help="Use semantic/vector search (requires --openai-api-key)")
+    parser.add_argument("--openai-api-key", help="OpenAI API key for embeddings")
+    parser.add_argument("--embedding-model", default="text-embedding-3-small", help="Embedding model")
+    parser.add_argument("--use-azure-embeddings", action="store_true", help="Use Azure OpenAI Embeddings service (requires config.ini)")
+    parser.add_argument("--use-semantic", action="store_true", help="Use semantic/vector search (requires --openai-api-key or --use-azure-embeddings)")
+    parser.add_argument("--user-sid", default="default_user", help="User session ID for Azure embeddings (default: default_user)")
+    parser.add_argument("--azure-cert-path", help="Path to Azure certificate file (.pem)")
+    parser.add_argument("--azure-config-path", help="Path to config.ini file (default: script directory)")
     parser.add_argument("--graph-file", help="Graph pickle file (optional)")
     parser.add_argument("--output", required=True, help="Output HTML file")
     parser.add_argument("--max-results", type=int, default=10, help="Max search results")
     parser.add_argument("--graph-depth", type=int, default=2, help="Graph traversal depth")
     
-    # LLM arguments
+    # LLM arguments (query-specific)
     parser.add_argument("--use-llm", action="store_true", help="Generate LLM response with context from search results")
-    parser.add_argument("--llm-config", help="Path to config.ini file for LLM configuration (default: script directory)")
-    parser.add_argument("--llm-cert-path", help="Path to Azure certificate file (.pem)")
-    parser.add_argument("--user-sid", default="default_user", help="User session ID for LLM (default: default_user)")
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming for LLM response")
     args = parser.parse_args()
     
-    # Validate arguments
-    if not args.opensearch_host and not args.opensearch_config:
-        parser.error("Either --opensearch-host or --opensearch-config is required")
+    # Determine config path (use opensearch-config if provided, otherwise try default location)
+    config_path = args.opensearch_config
+    if config_path is None:
+        current_dir = os.path.dirname(__file__)
+        default_config = os.path.join(current_dir, "config.ini")
+        if os.path.exists(default_config):
+            config_path = default_config
     
-    if args.use_semantic and not args.openai_api_key:
-        parser.error("--openai-api-key is required when using --use-semantic")
+    # Check if config file exists and has OpenSearch settings
+    opensearch_from_config = False
+    if config_path and os.path.exists(config_path):
+        config = configparser.ConfigParser()
+        config.read(config_path)
+        if 'aws_info' in config:
+            opensearch_from_config = bool(config['aws_info'].get('opensearch_endpoint'))
+    
+    # Determine Azure config path (use azure-config-path if provided, otherwise try default location or opensearch-config)
+    azure_config_path = args.azure_config_path
+    if azure_config_path is None:
+        if config_path:
+            azure_config_path = config_path  # Use same config file
+        else:
+            current_dir = os.path.dirname(__file__)
+            default_config = os.path.join(current_dir, "config.ini")
+            if os.path.exists(default_config):
+                azure_config_path = default_config
+    
+    # Validate arguments - allow config file to provide OpenSearch settings
+    if not args.opensearch_host and not opensearch_from_config:
+        parser.error("Either --opensearch-host or --opensearch-config (with opensearch_endpoint in [aws_info] section) is required")
+    
+    if args.use_semantic and not args.openai_api_key and not args.use_azure_embeddings:
+        parser.error("Either --openai-api-key or --use-azure-embeddings is required when using --use-semantic")
     
     # Search
     searcher = StandaloneSearcher(
         host=args.opensearch_host,
         index=args.opensearch_index,
-        config_path=args.opensearch_config,
+        config_path=config_path,  # Use determined config path
         use_aws_auth=args.opensearch_use_aws_auth,
         region=args.opensearch_region,
         use_ssl=args.opensearch_use_ssl,
         verify_certs=args.opensearch_verify_certs,
         openai_api_key=args.openai_api_key,
-        embedding_model=args.embedding_model
+        embedding_model=args.embedding_model,
+        use_azure_embeddings=args.use_azure_embeddings,
+        user_sid=args.user_sid,
+        azure_cert_path=args.azure_cert_path,
+        azure_config_path=azure_config_path
     )
     
     results = searcher.search(
@@ -757,8 +957,8 @@ def main():
                 llm_client = LLMClient(
                     token_manager=None,
                     user_sid=args.user_sid,
-                    cert_path=args.llm_cert_path,
-                    config_path=args.llm_config
+                    cert_path=args.azure_cert_path,
+                    config_path=azure_config_path
                 )
                 llm_response = llm_client.generate_response(
                     query=args.query,
