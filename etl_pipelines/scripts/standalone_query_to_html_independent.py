@@ -356,7 +356,7 @@ class StandaloneSearcher:
         try:
             # Build query
             query_body = {
-                "size": top_k,
+                    "size": top_k,
             }
             
             if use_semantic:
@@ -381,8 +381,8 @@ class StandaloneSearcher:
                     use_semantic = False
                 
                 if query_embedding:
-                    
-                    # Build kNN query
+                    # Build kNN query - OpenSearch format
+                    # Use hybrid approach: combine kNN with query filters
                     knn_query = {
                         "field": "embedding",
                         "query_vector": query_embedding,
@@ -390,18 +390,25 @@ class StandaloneSearcher:
                         "num_candidates": top_k * 2
                     }
                     
-                    # Add filters
-                    filters = []
+                    # Build filter clauses for post_filter or query
+                    filter_clauses = []
                     if application_name:
-                        filters.append({"term": {"application_name": application_name}})
+                        filter_clauses.append({"term": {"application_name": application_name}})
                     if seal_id:
-                        filters.append({"term": {"seal_id": seal_id}})
+                        filter_clauses.append({"term": {"seal_id": seal_id}})
                     
-                    if filters:
-                        knn_query["filter"] = {"bool": {"must": filters}}
+                    # Use post_filter for filters (more compatible across OpenSearch versions)
+                    if filter_clauses:
+                        query_body["post_filter"] = {
+                            "bool": {
+                                "must": filter_clauses
+                            }
+                        }
                     
-                    query_body["query"] = {"match_all": {}}
+                    # OpenSearch kNN query - kNN at top level
                     query_body["knn"] = knn_query
+                    # Add match_all query for hybrid search (optional but can help)
+                    query_body["query"] = {"match_all": {}}
                 else:
                     use_semantic = False
             
@@ -428,9 +435,10 @@ class StandaloneSearcher:
                     }
                 }
             
+            # Use same pattern as build script - OpenSearch client API
             response = self.client.search(
-                index=self.index_name,
-                body=query_body
+                body=query_body,
+                index=self.index_name
             )
             
             results = []
