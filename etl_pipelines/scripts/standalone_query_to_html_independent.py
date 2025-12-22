@@ -479,22 +479,24 @@ class StandaloneSearcher:
                 
                 if query_embedding:
                     # Build kNN query - OpenSearch format
-                    # Use hybrid approach: combine kNN with query filters
+                    # Structure matches mapping: field "embedding" with type "knn_vector"
                     knn_query = {
-                        "field": "embedding",
-                        "query_vector": query_embedding,
-                        "k": top_k,
-                        "num_candidates": top_k * 2
+                        "field": "embedding",  # Matches mapping field name
+                        "query_vector": query_embedding,  # Vector to search
+                        "k": top_k,  # Number of results
+                        "num_candidates": top_k * 2  # Candidates to consider (for approximate search)
                     }
                     
-                    # Build filter clauses for post_filter or query
+                    # Build filter clauses for post_filter (more compatible across OpenSearch versions)
+                    # Filters are applied AFTER kNN search, not inside knn object
                     filter_clauses = []
                     if application_name:
                         filter_clauses.append({"term": {"application_name": application_name}})
                     if seal_id:
                         filter_clauses.append({"term": {"seal_id": seal_id}})
                     
-                    # Use post_filter for filters (more compatible across OpenSearch versions)
+                    # Use post_filter for filters (compatible with all OpenSearch versions)
+                    # This is applied after kNN search, filtering the results
                     if filter_clauses:
                         query_body["post_filter"] = {
                             "bool": {
@@ -502,9 +504,12 @@ class StandaloneSearcher:
                             }
                         }
                     
-                    # OpenSearch kNN query - kNN at top level
+                    # OpenSearch kNN query - kNN at top level (OpenSearch 2.4+ format)
+                    # This structure matches the knn_vector mapping in build script
                     query_body["knn"] = knn_query
-                    # Add match_all query for hybrid search (optional but can help)
+                    
+                    # Add match_all query for hybrid search (combines kNN with text search)
+                    # This allows OpenSearch to combine vector and text search results
                     query_body["query"] = {"match_all": {}}
                 else:
                     use_semantic = False
