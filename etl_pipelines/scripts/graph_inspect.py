@@ -39,6 +39,17 @@ def main():
         if d.get("file_path") == args.file_path
     ]
 
+    # If no direct match, try matching by filename suffix
+    if not matching_nodes:
+        target_name = Path(args.file_path).name
+        matches_by_name = [
+            (n, d) for n, d in G.nodes(data=True)
+            if d.get("file_path", "").replace(\"\\\", \"/\").endswith(f"/{target_name}")
+               or Path(d.get("file_path", "")).name == target_name
+        ]
+        if matches_by_name:
+            matching_nodes = [matches_by_name[0]]
+
     if not matching_nodes:
         print(f"No nodes found with file_path = {args.file_path}")
         return
