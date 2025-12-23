@@ -44,7 +44,7 @@ def main():
         target_name = Path(args.file_path).name
         matches_by_name = [
             (n, d) for n, d in G.nodes(data=True)
-            if d.get("file_path", "").replace(\"\\\", \"/\").endswith(f"/{target_name}")
+            if d.get("file_path", "").replace("\\", "/").endswith(f"/{target_name}")
                or Path(d.get("file_path", "")).name == target_name
         ]
         if matches_by_name:
