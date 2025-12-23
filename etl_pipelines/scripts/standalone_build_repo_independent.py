@@ -1608,7 +1608,6 @@ class StandaloneOpenSearch:
             mapping = {
                 "mappings": {
                     "properties": {
-                        "_id": {"type": "keyword"},  # Hash of entire chunk content
                         "chunk_id": {"type": "keyword"},
                         "type": {"type": "keyword"},
                         "fqn": {"type": "keyword"},
@@ -1649,7 +1648,6 @@ class StandaloneOpenSearch:
             
             # Document
             doc = {
-                '_id': doc_id,  # Hash of entire chunk content
                 'chunk_id': chunk['chunk_id'],
                 'type': chunk['type'],
                 'fqn': chunk['fqn'],
