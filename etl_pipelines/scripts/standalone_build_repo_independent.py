@@ -545,6 +545,8 @@ class StandaloneIndexer:
         self.n_jobs = n_jobs  # -1 means use all CPUs
         self.checkpoint_file = checkpoint_file
         self.use_azure_embeddings = use_azure_embeddings
+        self.repo_path = None  # Will be set when processing starts
+        self.module_map = {}  # Cache for module mapping (file_path -> module_name)
         
         # Initialize embedding service (Azure or OpenAI)
         if use_azure_embeddings and AZURE_EMBEDDINGS_AVAILABLE:
@@ -656,6 +658,105 @@ class StandaloneIndexer:
         
         return f"chunk_{chunk_id}"
     
+    def _generate_chunk_content_id(self, chunk: Dict[str, Any]) -> str:
+        """
+        Generate a unique _id based on hash of entire chunk content.
+        This is different from chunk_id which is based on location.
+        """
+        # Create a string representation of the entire chunk content
+        content_string = f"{chunk.get('code', '')}{chunk.get('summary', '')}{chunk.get('fqn', '')}{chunk.get('type', '')}"
+        
+        # Generate hash of entire content
+        content_hash = hashlib.sha256(content_string.encode()).hexdigest()
+        
+        return f"content_{content_hash}"
+    
+    def _get_filetype(self, file_path: str) -> str:
+        """Extract file extension (filetype) from file path."""
+        return Path(file_path).suffix.lower() or 'unknown'
+    
+    def _get_relative_path(self, file_path: str) -> str:
+        """Convert absolute file path to relative path from repo root."""
+        if not self.repo_path:
+            # If repo_path not set, return original path
+            return file_path
+        
+        try:
+            file_path_obj = Path(file_path)
+            repo_path_obj = Path(self.repo_path)
+            
+            # Get relative path
+            try:
+                relative_path = file_path_obj.relative_to(repo_path_obj)
+                return str(relative_path)
+            except ValueError:
+                # File is not under repo_path, return original
+                return file_path
+        except Exception:
+            return file_path
+    
+    def _get_module_for_file(self, file_path: str) -> Optional[str]:
+        """
+        Extract module name for Java files in multi-module Maven projects.
+        Returns None if not a Java file or not in a multi-module project.
+        """
+        # Check cache first
+        if file_path in self.module_map:
+            return self.module_map[file_path]
+        
+        # Only process Java files
+        if not file_path.endswith('.java'):
+            self.module_map[file_path] = None
+            return None
+        
+        if not self.repo_path:
+            self.module_map[file_path] = None
+            return None
+        
+        try:
+            file_path_obj = Path(file_path)
+            repo_path_obj = Path(self.repo_path)
+            
+            # Find pom.xml files to determine module structure
+            # Look for pom.xml in parent directories
+            current_dir = file_path_obj.parent
+            while current_dir != repo_path_obj.parent:
+                pom_file = current_dir / 'pom.xml'
+                if pom_file.exists():
+                    # Check if this pom.xml has a parent (indicating it's a module)
+                    import xml.etree.ElementTree as ET
+                    try:
+                        tree = ET.parse(pom_file)
+                        root = tree.getroot()
+                        
+                        # Remove namespace
+                        for elem in root.iter():
+                            if '}' in elem.tag:
+                                elem.tag = elem.tag.split('}')[1]
+                        
+                        # Check if this is a module (has parent pom.xml)
+                        parent = root.find('parent')
+                        if parent is not None:
+                            # This is a module, get its artifactId
+                            artifact_id = root.find('artifactId')
+                            if artifact_id is not None:
+                                module_name = artifact_id.text
+                                self.module_map[file_path] = module_name
+                                return module_name
+                    except Exception:
+                        pass
+                
+                if current_dir == repo_path_obj:
+                    break
+                current_dir = current_dir.parent
+            
+            # Not in a module
+            self.module_map[file_path] = None
+            return None
+        except Exception:
+            self.module_map[file_path] = None
+            return None
+    
     def find_code_files(self, repo_path: str) -> List[str]:
         """Find all code files in repository."""
         code_files = []
@@ -713,6 +814,10 @@ class StandaloneIndexer:
     
     async def process_repository(self, repo_path: str) -> List[Dict[str, Any]]:
         """Process repository and generate chunks using configured strategy."""
+        # Store repo_path for relative path conversion and module extraction
+        self.repo_path = repo_path
+        self.module_map = {}  # Reset module cache
+        
         print(f"📁 Scanning repository: {repo_path}")
         print(f"   Strategy: {self.chunking_strategy}")
         print(f"   Max chunk size: {self.max_chunk_size}")
@@ -938,36 +1043,61 @@ class StandaloneIndexer:
         # File chunk (only for small files)
         file_content = parsed.get('file_content', '')
         if file_content and len(file_content) <= self.max_chunk_size:
+            # Get relative path
+            relative_path = self._get_relative_path(file_path)
+            
             chunk = {
                 'type': 'file',
-                'fqn': file_path,
-                'file_path': file_path,
+                'fqn': relative_path,
+                'file_path': relative_path,  # Use relative path
                 'start_line': 1,
                 'end_line': len(file_content.split('\n')),
                 'code': file_content,
                 'summary': f"File {Path(file_path).name}",
                 'language': parsed.get('language', 'unknown'),
+                'filetype': self._get_filetype(file_path),
             }
-            # Generate unique chunk_id
+            
+            # Add module for Java files
+            if parsed.get('language', 'unknown') == 'java':
+                module = self._get_module_for_file(file_path)
+                if module:
+                    chunk['module'] = module
+            
+            # Generate unique chunk_id and _id
             chunk['chunk_id'] = self._generate_chunk_id(chunk)
+            chunk['_id'] = self._generate_chunk_content_id(chunk)
             chunks.append(chunk)
         
         return chunks
     
     def _create_method_chunk(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> Dict[str, Any]:
         """Create a method chunk."""
+        # Get relative path
+        relative_path = self._get_relative_path(file_path)
+        
         chunk = {
             'type': 'method',
             'fqn': f"{Path(file_path).stem}.{func['name']}",
-            'file_path': file_path,
+            'file_path': relative_path,  # Use relative path
             'start_line': func.get('start_line', 1),
             'end_line': func.get('end_line', 1),
             'code': func.get('code', ''),
             'summary': f"Method {func['name']}",
             'language': parsed.get('language', 'unknown'),
+            'filetype': self._get_filetype(file_path),
         }
-        # Generate unique chunk_id
+        
+        # Add module for Java files
+        if parsed.get('language', 'unknown') == 'java':
+            module = self._get_module_for_file(file_path)
+            if module:
+                chunk['module'] = module
+        
+        # Generate unique chunk_id and _id
         chunk['chunk_id'] = self._generate_chunk_id(chunk)
+        chunk['_id'] = self._generate_chunk_content_id(chunk)
+        
         return chunk
     
     def _create_class_metadata_chunk(self, cls: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> Dict[str, Any]:
@@ -1044,18 +1174,31 @@ class StandaloneIndexer:
         code_lines = class_metadata_code.split('\n')
         end_line = start_line + len(code_lines) - 1
         
+        # Get relative path
+        relative_path = self._get_relative_path(file_path)
+        
         chunk = {
             'type': 'class',
             'fqn': f"{Path(file_path).stem}.{cls['name']}",
-            'file_path': file_path,
+            'file_path': relative_path,  # Use relative path
             'start_line': start_line,
             'end_line': end_line,  # Updated to include class-level code
             'code': class_metadata_code,  # Signature + fields + static/instance blocks
             'summary': f"Class {cls['name']}",
             'language': parsed.get('language', 'unknown'),
+            'filetype': self._get_filetype(file_path),
         }
-        # Generate unique chunk_id
+        
+        # Add module for Java files
+        if parsed.get('language', 'unknown') == 'java':
+            module = self._get_module_for_file(file_path)
+            if module:
+                chunk['module'] = module
+        
+        # Generate unique chunk_id and _id
         chunk['chunk_id'] = self._generate_chunk_id(chunk)
+        chunk['_id'] = self._generate_chunk_content_id(chunk)
+        
         return chunk
     
     def _split_large_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str) -> List[Dict[str, Any]]:
@@ -1063,6 +1206,21 @@ class StandaloneIndexer:
         chunks = []
         lines = code.split('\n')
         lines_per_chunk = self.max_chunk_size // 50  # Rough estimate
+        
+        # Get relative path and filetype
+        relative_path = self._get_relative_path(file_path)
+        filetype = self._get_filetype(file_path)
+        
+        # Infer language from file extension
+        language = 'unknown'
+        if filetype == '.java':
+            language = 'java'
+        elif filetype == '.py':
+            language = 'python'
+        elif filetype in ['.js', '.jsx']:
+            language = 'javascript'
+        elif filetype in ['.ts', '.tsx']:
+            language = 'typescript'
         
         for i in range(0, len(lines), lines_per_chunk):
             chunk_lines = lines[i:i + lines_per_chunk]
@@ -1073,34 +1231,67 @@ class StandaloneIndexer:
             chunk = {
                 'type': entity_type,
                 'fqn': f"{Path(file_path).stem}.{entity['name']}_part{i // lines_per_chunk}",
-                'file_path': file_path,
+                'file_path': relative_path,  # Use relative path
                 'start_line': chunk_start,
                 'end_line': chunk_end,
                 'code': chunk_code,
                 'summary': f"{entity_type.title()} {entity['name']} (part {i // lines_per_chunk + 1})",
-                'language': 'unknown',
+                'language': language,
+                'filetype': filetype,
             }
-            # Generate unique chunk_id
+            
+            # Add module for Java files
+            if language == 'java':
+                module = self._get_module_for_file(file_path)
+                if module:
+                    chunk['module'] = module
+            
+            # Generate unique chunk_id and _id
             chunk['chunk_id'] = self._generate_chunk_id(chunk)
+            chunk['_id'] = self._generate_chunk_content_id(chunk)
             chunks.append(chunk)
         
         return chunks
     
     def _recursive_split_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str) -> List[Dict[str, Any]]:
         """Recursively split code by logical blocks."""
+        # Get relative path and filetype
+        relative_path = self._get_relative_path(file_path)
+        filetype = self._get_filetype(file_path)
+        
+        # Infer language from file extension
+        language = 'unknown'
+        if filetype == '.java':
+            language = 'java'
+        elif filetype == '.py':
+            language = 'python'
+        elif filetype in ['.js', '.jsx']:
+            language = 'javascript'
+        elif filetype in ['.ts', '.tsx']:
+            language = 'typescript'
+        
         if len(code) <= self.max_chunk_size:
             chunk = {
                 'type': entity_type,
                 'fqn': f"{Path(file_path).stem}.{entity['name']}",
-                'file_path': file_path,
+                'file_path': relative_path,  # Use relative path
                 'start_line': entity.get('start_line', 1),
                 'end_line': entity.get('end_line', 1),
                 'code': code,
                 'summary': f"{entity_type.title()} {entity['name']}",
-                'language': 'unknown',
+                'language': language,
+                'filetype': filetype,
             }
-            # Generate unique chunk_id
+            
+            # Add module for Java files
+            if language == 'java':
+                module = self._get_module_for_file(file_path)
+                if module:
+                    chunk['module'] = module
+            
+            # Generate unique chunk_id and _id
             chunk['chunk_id'] = self._generate_chunk_id(chunk)
+            chunk['_id'] = self._generate_chunk_content_id(chunk)
             return [chunk]
         
         # Try to split by logical blocks
@@ -1158,6 +1349,21 @@ class StandaloneIndexer:
         window_size = self.max_chunk_size // 50
         overlap_lines = self.chunk_overlap_size // 50
         
+        # Get relative path and filetype
+        relative_path = self._get_relative_path(file_path)
+        filetype = self._get_filetype(file_path)
+        
+        # Infer language from file extension
+        language = 'unknown'
+        if filetype == '.java':
+            language = 'java'
+        elif filetype == '.py':
+            language = 'python'
+        elif filetype in ['.js', '.jsx']:
+            language = 'javascript'
+        elif filetype in ['.ts', '.tsx']:
+            language = 'typescript'
+        
         for i in range(0, len(lines), window_size - overlap_lines):
             window_lines = lines[i:min(i + window_size, len(lines))]
             window_code = '\n'.join(window_lines)
@@ -1167,15 +1373,24 @@ class StandaloneIndexer:
             chunk = {
                 'type': 'class',
                 'fqn': f"{Path(file_path).stem}.{entity['name']}_window{i // (window_size - overlap_lines)}",
-                'file_path': file_path,
+                'file_path': relative_path,  # Use relative path
                 'start_line': window_start,
                 'end_line': window_end,
                 'code': window_code,
                 'summary': f"Class {entity['name']} (window {i // (window_size - overlap_lines) + 1})",
-                'language': 'unknown',
+                'language': language,
+                'filetype': filetype,
             }
-            # Generate unique chunk_id
+            
+            # Add module for Java files
+            if language == 'java':
+                module = self._get_module_for_file(file_path)
+                if module:
+                    chunk['module'] = module
+            
+            # Generate unique chunk_id and _id
             chunk['chunk_id'] = self._generate_chunk_id(chunk)
+            chunk['_id'] = self._generate_chunk_content_id(chunk)
             chunks.append(chunk)
         
         return chunks
@@ -1393,10 +1608,13 @@ class StandaloneOpenSearch:
             mapping = {
                 "mappings": {
                     "properties": {
+                        "_id": {"type": "keyword"},  # Hash of entire chunk content
                         "chunk_id": {"type": "keyword"},
                         "type": {"type": "keyword"},
                         "fqn": {"type": "keyword"},
-                        "file_path": {"type": "keyword"},
+                        "file_path": {"type": "keyword"},  # Relative path
+                        "filetype": {"type": "keyword"},  # File extension (.java, .py, etc.)
+                        "module": {"type": "keyword"},  # Maven module (Java only, optional)
                         "code": {"type": "text"},
                         "summary": {"type": "text"},
                         "application_name": {"type": "keyword"},
@@ -1420,26 +1638,35 @@ class StandaloneOpenSearch:
         """Prepare bulk request body for a batch of chunks."""
         bulk_body = []
         for chunk in batch_chunks:
-            # Action metadata
+            # Action metadata - use _id if available, otherwise chunk_id
+            doc_id = chunk.get('_id', chunk['chunk_id'])
             bulk_body.append({
                 "index": {
                     "_index": self.index_name,
-                    "_id": chunk['chunk_id']
+                    "_id": doc_id
                 }
             })
             
             # Document
-            bulk_body.append({
+            doc = {
+                '_id': doc_id,  # Hash of entire chunk content
                 'chunk_id': chunk['chunk_id'],
                 'type': chunk['type'],
                 'fqn': chunk['fqn'],
-                'file_path': chunk['file_path'],
+                'file_path': chunk['file_path'],  # Already relative path
+                'filetype': chunk.get('filetype', ''),
                 'code': chunk['code'],
                 'summary': chunk.get('summary', ''),
                 'application_name': self.application_name or '',
                 'seal_id': self.seal_id or '',
                 'embedding': chunk['embedding'],
-            })
+            }
+            
+            # Add module if present (Java files in multi-module Maven projects)
+            if 'module' in chunk:
+                doc['module'] = chunk['module']
+            
+            bulk_body.append(doc)
         return bulk_body
     
     def _index_batch(self, batch_chunks: List[Dict[str, Any]], batch_num: int) -> tuple[int, int, Optional[str]]:
