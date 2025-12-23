@@ -2151,12 +2151,39 @@ class ConfigFileParser:
 class StandaloneGraphBuilder:
     """Self-contained graph builder using NetworkX with rich schema."""
     
-    def __init__(self, use_rich_graph: bool = True):
+    def __init__(self, use_rich_graph: bool = True, repo_path: Optional[str] = None):
         self.graph = None
         self.use_rich_graph = use_rich_graph
+        self.repo_path = repo_path  # Store repo path for path normalization
         if NETWORKX_AVAILABLE:
             self.graph = nx.MultiDiGraph()
             print("✅ NetworkX graph initialized")
+    
+    def _normalize_file_path(self, file_path: str) -> str:
+        """Normalize file path to relative path from repo root."""
+        if not file_path:
+            return file_path
+        
+        if not self.repo_path:
+            return file_path
+        
+        try:
+            file_path_obj = Path(file_path)
+            repo_path_obj = Path(self.repo_path)
+            
+            # If already relative, return as-is
+            if not file_path_obj.is_absolute():
+                return file_path
+            
+            # Convert absolute to relative
+            try:
+                relative_path = file_path_obj.relative_to(repo_path_obj)
+                return str(relative_path)
+            except ValueError:
+                # File is not under repo_path, return original
+                return file_path
+        except Exception:
+            return file_path
     
     def build_graph(
         self,
@@ -2301,6 +2328,8 @@ class StandaloneGraphBuilder:
         for chunk in chunks:
             file_path = chunk.get('file_path', '')
             if file_path and file_path not in seen_files:
+                # Use first chunk's chunk_id for this file (or create file-level node)
+                # For now, create a file-level node ID but store chunk_ids
                 file_id = f"file_{hashlib.sha256(file_path.encode()).hexdigest()[:16]}"
                 self.graph.add_node(
                     file_id,
@@ -2313,94 +2342,106 @@ class StandaloneGraphBuilder:
         
         return file_nodes
     
-    def _add_class_nodes(self, chunks: List[Dict[str, Any]], parsed_files: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
-        """Add Class nodes and return mapping of class_name -> node_id."""
-        class_nodes = {}
-        seen_classes = set()
+    def _add_class_nodes(self, chunks: List[Dict[str, Any]], parsed_files: Optional[List[Dict[str, Any]]]) -> Dict[str, List[str]]:
+        """Add Class nodes using chunk_id as node ID. Returns mapping of class_key -> [list of chunk_ids]."""
+        class_nodes = {}  # class_key -> [chunk_ids]
+        class_info_map = {}  # class_key -> class_info from parsed_files
         
-        # Get class info from parsed files
-        class_info_map = {}
+        # Get class info from parsed files (normalize paths)
         if parsed_files:
             for parsed in parsed_files:
+                parsed_file_path = self._normalize_file_path(parsed.get('file_path', ''))
                 for cls in parsed.get('classes', []):
                     class_name = cls.get('name', '')
-                    file_path = parsed.get('file_path', '')
-                    if class_name and file_path:
-                        key = f"{file_path}::{class_name}"
+                    if class_name and parsed_file_path:
+                        key = f"{parsed_file_path}::{class_name}"
                         if key not in class_info_map:
                             class_info_map[key] = cls
         
-        # Add class nodes from chunks
+        # Add class nodes from chunks - use chunk_id as node ID
         for chunk in chunks:
             if chunk.get('type') == 'class':
+                chunk_id = chunk.get('chunk_id')
+                if not chunk_id:
+                    continue
+                
                 fqn = chunk.get('fqn', '')
-                file_path = chunk.get('file_path', '')
+                file_path = chunk.get('file_path', '')  # Already relative from chunks
                 class_name = fqn.split('.')[-1] if '.' in fqn else fqn
                 
                 key = f"{file_path}::{class_name}"
-                if key not in seen_classes:
-                    class_id = f"class_{hashlib.sha256(key.encode()).hexdigest()[:16]}"
-                    class_info = class_info_map.get(key, {})
-                    
-                    self.graph.add_node(
-                        class_id,
-                        entity_type='JavaClass',
-                        name=class_name,
-                        fqn=fqn,
-                        file_path=file_path,
-                        start_line=chunk.get('start_line', 1),
-                        end_line=chunk.get('end_line', 1),
-                        language=chunk.get('language', 'unknown')
-                    )
-                    class_nodes[key] = class_id
-                    seen_classes.add(key)
+                class_info = class_info_map.get(key, {})
+                
+                # Use chunk_id as node ID
+                self.graph.add_node(
+                    chunk_id,
+                    entity_type='JavaClass',
+                    name=class_name,
+                    fqn=fqn,
+                    file_path=file_path,
+                    start_line=chunk.get('start_line', 1),
+                    end_line=chunk.get('end_line', 1),
+                    language=chunk.get('language', 'unknown'),
+                    chunk_id=chunk_id
+                )
+                
+                # Track all chunks for this class
+                if key not in class_nodes:
+                    class_nodes[key] = []
+                class_nodes[key].append(chunk_id)
         
         return class_nodes
     
-    def _add_method_nodes(self, chunks: List[Dict[str, Any]], parsed_files: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
-        """Add Method nodes and return mapping of method_signature -> node_id."""
-        method_nodes = {}
-        seen_methods = set()
+    def _add_method_nodes(self, chunks: List[Dict[str, Any]], parsed_files: Optional[List[Dict[str, Any]]]) -> Dict[str, List[str]]:
+        """Add Method nodes using chunk_id as node ID. Returns mapping of method_key -> [list of chunk_ids]."""
+        method_nodes = {}  # method_key -> [chunk_ids]
+        method_info_map = {}  # method_key -> method_info from parsed_files
         
-        # Get method info from parsed files
-        method_info_map = {}
+        # Get method info from parsed files (normalize paths)
         if parsed_files:
             for parsed in parsed_files:
+                parsed_file_path = self._normalize_file_path(parsed.get('file_path', ''))
                 for func in parsed.get('functions', []):
                     method_name = func.get('name', '')
                     class_name = func.get('class_name', '')
-                    file_path = parsed.get('file_path', '')
-                    if method_name and file_path:
-                        key = f"{file_path}::{class_name}::{method_name}"
+                    if method_name and parsed_file_path:
+                        key = f"{parsed_file_path}::{class_name}::{method_name}"
                         if key not in method_info_map:
                             method_info_map[key] = func
         
-        # Add method nodes from chunks
+        # Add method nodes from chunks - use chunk_id as node ID
         for chunk in chunks:
             if chunk.get('type') == 'method':
+                chunk_id = chunk.get('chunk_id')
+                if not chunk_id:
+                    continue
+                
                 fqn = chunk.get('fqn', '')
-                file_path = chunk.get('file_path', '')
+                file_path = chunk.get('file_path', '')  # Already relative from chunks
                 method_name = fqn.split('.')[-1] if '.' in fqn else fqn
                 class_name = '.'.join(fqn.split('.')[:-1]) if '.' in fqn else ''
                 
                 key = f"{file_path}::{class_name}::{method_name}"
-                if key not in seen_methods:
-                    method_id = f"method_{hashlib.sha256(key.encode()).hexdigest()[:16]}"
-                    method_info = method_info_map.get(key, {})
-                    
-                    self.graph.add_node(
-                        method_id,
-                        entity_type='Method',
-                        name=method_name,
-                        fqn=fqn,
-                        class_name=class_name,
-                        file_path=file_path,
-                        start_line=chunk.get('start_line', 1),
-                        end_line=chunk.get('end_line', 1),
-                        language=chunk.get('language', 'unknown')
-                    )
-                    method_nodes[key] = method_id
-                    seen_methods.add(key)
+                method_info = method_info_map.get(key, {})
+                
+                # Use chunk_id as node ID
+                self.graph.add_node(
+                    chunk_id,
+                    entity_type='Method',
+                    name=method_name,
+                    fqn=fqn,
+                    class_name=class_name,
+                    file_path=file_path,
+                    start_line=chunk.get('start_line', 1),
+                    end_line=chunk.get('end_line', 1),
+                    language=chunk.get('language', 'unknown'),
+                    chunk_id=chunk_id
+                )
+                
+                # Track all chunks for this method
+                if key not in method_nodes:
+                    method_nodes[key] = []
+                method_nodes[key].append(chunk_id)
         
         return method_nodes
     
@@ -2465,10 +2506,15 @@ class StandaloneGraphBuilder:
         external_resources: Optional[List[Dict[str, Any]]],
         parsed_files: Optional[List[Dict[str, Any]]],
         file_nodes: Dict[str, str],
-        class_nodes: Dict[str, str],
-        method_nodes: Dict[str, str]
+        class_nodes: Dict[str, List[str]],  # Now returns lists of chunk_ids
+        method_nodes: Dict[str, List[str]]  # Now returns lists of chunk_ids
     ):
         """Add all relationship edges."""
+        print("📊 Building relationships...")
+        print(f"   Class nodes: {len(class_nodes)}")
+        print(f"   Method nodes: {len(method_nodes)}")
+        print(f"   Parsed files: {len(parsed_files) if parsed_files else 0}")
+        
         # Service CONTAINS File
         if application_data:
             for service in application_data.get('services', []):
@@ -2478,64 +2524,95 @@ class StandaloneGraphBuilder:
                     if file_path.startswith(service_path):
                         self.graph.add_edge(service_id, file_id, relationship='CONTAINS')
         
-        # File DECLARES Class
+        # File DECLARES Class (connect to first chunk of each class)
         for file_path, file_id in file_nodes.items():
-            for key, class_id in class_nodes.items():
+            for key, chunk_ids in class_nodes.items():
                 if key.startswith(file_path + "::"):
-                    self.graph.add_edge(file_id, class_id, relationship='DECLARES')
+                    # Connect file to first chunk of the class
+                    if chunk_ids:
+                        self.graph.add_edge(file_id, chunk_ids[0], relationship='DECLARES')
         
-        # Class DECLARES_METHOD Method
-        for key, class_id in class_nodes.items():
-            file_path, class_name = key.split("::", 1)
-            for method_key, method_id in method_nodes.items():
-                if method_key.startswith(f"{file_path}::{class_name}::"):
-                    self.graph.add_edge(class_id, method_id, relationship='DECLARES_METHOD')
+        # Class DECLARES_METHOD Method (connect first chunk of class to first chunk of method)
+        for key, chunk_ids in class_nodes.items():
+            if chunk_ids:
+                file_path, class_name = key.split("::", 1)
+                for method_key, method_chunk_ids in method_nodes.items():
+                    if method_key.startswith(f"{file_path}::{class_name}::"):
+                        if method_chunk_ids:
+                            # Connect first class chunk to first method chunk
+                            self.graph.add_edge(chunk_ids[0], method_chunk_ids[0], relationship='DECLARES_METHOD')
         
         # Class EXTENDS, IMPLEMENTS, REFERENCES
+        extends_count = 0
+        implements_count = 0
+        references_count = 0
+        
         if parsed_files:
             for parsed in parsed_files:
+                parsed_file_path = self._normalize_file_path(parsed.get('file_path', ''))
                 for cls in parsed.get('classes', []):
                     class_name = cls.get('name', '')
-                    file_path = parsed.get('file_path', '')
-                    key = f"{file_path}::{class_name}"
-                    class_id = class_nodes.get(key)
+                    if not class_name or not parsed_file_path:
+                        continue
                     
-                    if class_id:
+                    key = f"{parsed_file_path}::{class_name}"
+                    source_chunk_ids = class_nodes.get(key, [])
+                    
+                    if source_chunk_ids:
+                        # Use first chunk as representative for entity-level relationships
+                        source_chunk_id = source_chunk_ids[0]
+                        
                         # EXTENDS
                         for extends_name in cls.get('extends', []):
-                            # Try to find target class
-                            target_class_id = self._find_class_by_name(extends_name, class_nodes, parsed_files)
-                            if target_class_id:
-                                self.graph.add_edge(class_id, target_class_id, relationship='EXTENDS')
+                            target_chunk_ids = self._find_class_chunks_by_name(extends_name, class_nodes, parsed_files)
+                            if target_chunk_ids:
+                                # Connect to first chunk of target class
+                                self.graph.add_edge(source_chunk_id, target_chunk_ids[0], relationship='EXTENDS')
+                                extends_count += 1
                         
                         # IMPLEMENTS
                         for impl_name in cls.get('implements', []):
-                            target_class_id = self._find_class_by_name(impl_name, class_nodes, parsed_files)
-                            if target_class_id:
-                                self.graph.add_edge(class_id, target_class_id, relationship='IMPLEMENTS')
+                            target_chunk_ids = self._find_class_chunks_by_name(impl_name, class_nodes, parsed_files)
+                            if target_chunk_ids:
+                                # Connect to first chunk of target class
+                                self.graph.add_edge(source_chunk_id, target_chunk_ids[0], relationship='IMPLEMENTS')
+                                implements_count += 1
                         
                         # REFERENCES
                         for ref_name in cls.get('references', []):
-                            target_class_id = self._find_class_by_name(ref_name, class_nodes, parsed_files)
-                            if target_class_id and target_class_id != class_id:
-                                self.graph.add_edge(class_id, target_class_id, relationship='REFERENCES')
+                            target_chunk_ids = self._find_class_chunks_by_name(ref_name, class_nodes, parsed_files)
+                            if target_chunk_ids and target_chunk_ids[0] != source_chunk_id:
+                                # Connect to first chunk of target class
+                                self.graph.add_edge(source_chunk_id, target_chunk_ids[0], relationship='REFERENCES')
+                                references_count += 1
+        
+        print(f"   Created {extends_count} EXTENDS, {implements_count} IMPLEMENTS, {references_count} REFERENCES relationships")
         
         # Method CALLS Method
+        calls_count = 0
         if parsed_files:
             for parsed in parsed_files:
+                parsed_file_path = self._normalize_file_path(parsed.get('file_path', ''))
                 for func in parsed.get('functions', []):
                     method_name = func.get('name', '')
                     class_name = func.get('class_name', '')
-                    file_path = parsed.get('file_path', '')
-                    key = f"{file_path}::{class_name}::{method_name}"
-                    method_id = method_nodes.get(key)
+                    if not method_name or not parsed_file_path:
+                        continue
                     
-                    if method_id:
+                    key = f"{parsed_file_path}::{class_name}::{method_name}"
+                    source_chunk_ids = method_nodes.get(key, [])
+                    
+                    if source_chunk_ids:
+                        # Use first chunk as representative
+                        source_chunk_id = source_chunk_ids[0]
                         for call in func.get('calls', []):
-                            # Try to find target method
-                            target_method_id = self._find_method_by_call(call, method_nodes, parsed_files)
-                            if target_method_id:
-                                self.graph.add_edge(method_id, target_method_id, relationship='CALLS')
+                            target_chunk_ids = self._find_method_chunks_by_call(call, method_nodes, parsed_files)
+                            if target_chunk_ids:
+                                # Connect to first chunk of target method
+                                self.graph.add_edge(source_chunk_id, target_chunk_ids[0], relationship='CALLS')
+                                calls_count += 1
+        
+        print(f"   Created {calls_count} CALLS relationships")
         
         # Method USES_RESOURCE ExternalResource
         # External resource extraction disabled - relationships can be added manually later
@@ -2581,17 +2658,19 @@ class StandaloneGraphBuilder:
                 artifact_id = f"config_{hashlib.sha256(artifact.get('path', '').encode()).hexdigest()[:16]}"
                 artifact_path = Path(artifact.get('path', ''))
                 
-                # Link classes in same directory or parent
-                for key, class_id in class_nodes.items():
-                    file_path = key.split("::")[0]
-                    if artifact_path.parent in Path(file_path).parents or artifact_path.parent == Path(file_path).parent:
-                        self.graph.add_edge(class_id, artifact_id, relationship='USES_CONFIG')
+                # Link classes in same directory or parent (connect to first chunk)
+                for key, chunk_ids in class_nodes.items():
+                    if chunk_ids:
+                        file_path = key.split("::")[0]
+                        if artifact_path.parent in Path(file_path).parents or artifact_path.parent == Path(file_path).parent:
+                            self.graph.add_edge(chunk_ids[0], artifact_id, relationship='USES_CONFIG')
                 
-                # Link methods similarly
-                for method_key, method_id in method_nodes.items():
-                    file_path = method_key.split("::")[0]
-                    if artifact_path.parent in Path(file_path).parents or artifact_path.parent == Path(file_path).parent:
-                        self.graph.add_edge(method_id, artifact_id, relationship='USES_CONFIG_METHOD')
+                # Link methods similarly (connect to first chunk)
+                for method_key, chunk_ids in method_nodes.items():
+                    if chunk_ids:
+                        file_path = method_key.split("::")[0]
+                        if artifact_path.parent in Path(file_path).parents or artifact_path.parent == Path(file_path).parent:
+                            self.graph.add_edge(chunk_ids[0], artifact_id, relationship='USES_CONFIG_METHOD')
         
         # Method REFERENCES_KEY ConfigKey (simplified - based on config key usage in code)
         if config_data and parsed_files:
@@ -2601,41 +2680,64 @@ class StandaloneGraphBuilder:
                 
                 # Search for key usage in method code
                 for parsed in parsed_files:
+                    parsed_file_path = self._normalize_file_path(parsed.get('file_path', ''))
                     for func in parsed.get('functions', []):
                         method_name = func.get('name', '')
                         class_name = func.get('class_name', '')
-                        file_path = parsed.get('file_path', '')
-                        key = f"{file_path}::{class_name}::{method_name}"
-                        method_id = method_nodes.get(key)
+                        if not method_name or not parsed_file_path:
+                            continue
                         
-                        if method_id and key_name.lower() in func.get('code', '').lower():
-                            self.graph.add_edge(method_id, key_id, relationship='REFERENCES_KEY')
+                        key = f"{parsed_file_path}::{class_name}::{method_name}"
+                        chunk_ids = method_nodes.get(key, [])
+                        
+                        if chunk_ids and key_name.lower() in func.get('code', '').lower():
+                            # Connect first chunk to config key
+                            self.graph.add_edge(chunk_ids[0], key_id, relationship='REFERENCES_KEY')
     
-    def _find_class_by_name(self, class_name: str, class_nodes: Dict[str, str], parsed_files: List[Dict[str, Any]]) -> Optional[str]:
-        """Find class node ID by name."""
-        # Try exact match first
-        for key, class_id in class_nodes.items():
-            if key.endswith(f"::{class_name}"):
-                return class_id
+    def _find_class_chunks_by_name(self, class_name: str, class_nodes: Dict[str, List[str]], parsed_files: List[Dict[str, Any]]) -> List[str]:
+        """
+        Find class chunk IDs by name. Returns list of chunk_ids.
+        Handles both simple names and FQNs.
+        """
+        # Extract simple class name from FQN if needed
+        simple_name = class_name.split('.')[-1] if '.' in class_name else class_name
         
-        # Try partial match
-        for key, class_id in class_nodes.items():
-            if class_name in key:
-                return class_id
+        # Try exact match first (key ends with ::ClassName)
+        for key, chunk_ids in class_nodes.items():
+            if key.endswith(f"::{simple_name}"):
+                return chunk_ids
         
-        return None
+        # Try partial match (class name appears in key)
+        for key, chunk_ids in class_nodes.items():
+            if f"::{simple_name}" in key or key.endswith(f"::{simple_name}"):
+                return chunk_ids
+        
+        # Try matching by FQN if available in parsed_files
+        if '.' in class_name:
+            # Look for matching FQN in parsed files
+            for parsed in parsed_files:
+                parsed_file_path = self._normalize_file_path(parsed.get('file_path', ''))
+                for cls in parsed.get('classes', []):
+                    if cls.get('name') == simple_name:
+                        key = f"{parsed_file_path}::{simple_name}"
+                        if key in class_nodes:
+                            return class_nodes[key]
+        
+        return []
     
-    def _find_method_by_call(self, call: str, method_nodes: Dict[str, str], parsed_files: List[Dict[str, Any]]) -> Optional[str]:
-        """Find method node ID by call signature."""
-        # Extract method name from call (e.g., "obj.method" -> "method")
+    def _find_method_chunks_by_call(self, call: str, method_nodes: Dict[str, List[str]], parsed_files: List[Dict[str, Any]]) -> List[str]:
+        """
+        Find method chunk IDs by call signature. Returns list of chunk_ids.
+        """
+        # Extract method name from call (e.g., "obj.method" -> "method", "Class.method" -> "method")
         method_name = call.split('.')[-1] if '.' in call else call
         
-        # Try to find matching method
-        for key, method_id in method_nodes.items():
+        # Try to find matching method (key ends with ::methodName)
+        for key, chunk_ids in method_nodes.items():
             if key.endswith(f"::{method_name}"):
-                return method_id
+                return chunk_ids
         
-        return None
+        return []
     
     def save_graph(self, output_path: str):
         """Save graph to pickle file."""
@@ -3676,7 +3778,7 @@ async def main():
         # external_resources = []
     
     # Build graph (rich graph if enabled, otherwise simple)
-    graph_builder = StandaloneGraphBuilder(use_rich_graph=use_rich_graph)
+    graph_builder = StandaloneGraphBuilder(use_rich_graph=use_rich_graph, repo_path=args.repo_path)
     graph_builder.build_graph(
         chunks=chunks,
         application_data=application_data,
