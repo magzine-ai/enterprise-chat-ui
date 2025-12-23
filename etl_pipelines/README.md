@@ -259,6 +259,18 @@ python standalone_query_to_html_independent.py \
 - `--include-code` - Include code snippets in report (default: `true`)
 - `--include-embeddings` - Include embedding vectors (default: `false`)
 
+### 3. Inspect Graph Nodes/Edges for a File
+
+```bash
+cd etl_pipelines/scripts
+
+python graph_inspect.py \
+  --graph-file ./output/graph.pkl \
+  --file-path src/main/java/com/acme/UserService.java \
+  --max-neighbors 20
+```
+Shows the graph nodes tied to the given `file_path` and their neighboring nodes/edges (limited by `--max-neighbors`). Requires `networkx`.
+
 ## Chunking Strategies
 
 Available strategies:
