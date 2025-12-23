@@ -650,8 +650,15 @@ class StandaloneIndexer:
         Generate a unique, deterministic chunk_id based on chunk attributes.
         Same chunk will always get the same ID.
         """
-        # Create a unique identifier from chunk attributes
-        unique_string = f"{chunk['file_path']}:{chunk['start_line']}:{chunk['end_line']}:{chunk['type']}:{chunk['fqn']}"
+        # Create a unique identifier from chunk attributes (tolerates missing keys)
+        unique_string = (
+            f"{chunk.get('file_path', '')}:"
+            f"{chunk.get('start_line', -1)}:"
+            f"{chunk.get('end_line', -1)}:"
+            f"{chunk.get('chunk_order', 0)}:"
+            f"{chunk.get('type', '')}:"
+            f"{chunk.get('fqn', '')}"
+        )
         
         # Generate hash for consistent, short ID
         chunk_id = hashlib.sha256(unique_string.encode()).hexdigest()[:16]  # 16-char hex ID
