@@ -544,6 +544,7 @@ class StandaloneSearcher:
             
             while retry_count <= max_retries:
                 try:
+                    print(qu)
                     response = self.client.search(
                         body=query_body,
                         index=self.index_name
