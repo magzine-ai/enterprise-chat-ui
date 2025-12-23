@@ -1621,6 +1621,8 @@ class StandaloneOpenSearch:
                         "file_path": {"type": "keyword"},  # Relative path
                         "filetype": {"type": "keyword"},  # File extension (.java, .py, etc.)
                         "module": {"type": "keyword"},  # Maven module (Java only, optional)
+                        "start_line": {"type": "integer"},
+                        "end_line": {"type": "integer"},
                         "code": {"type": "text"},
                         "summary": {"type": "text"},
                         "application_name": {"type": "keyword"},
@@ -1660,6 +1662,8 @@ class StandaloneOpenSearch:
                 'fqn': chunk['fqn'],
                 'file_path': chunk['file_path'],  # Already relative path
                 'filetype': chunk.get('filetype', ''),
+                'start_line': chunk.get('start_line', -1),
+                'end_line': chunk.get('end_line', -1),
                 'code': chunk['code'],
                 'summary': chunk.get('summary', ''),
                 'application_name': self.application_name or '',
