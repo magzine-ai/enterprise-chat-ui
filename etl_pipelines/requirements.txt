@@ -12,6 +12,9 @@ tree-sitter-javascript>=0.20.1
 tree-sitter-go>=0.19.1
 tree-sitter-rust>=0.20.3
 
+# javalang for better Java parsing (static fields, static blocks, etc.)
+javalang>=0.13.0
+
 # NetworkX for graph operations
 networkx>=3.0
 

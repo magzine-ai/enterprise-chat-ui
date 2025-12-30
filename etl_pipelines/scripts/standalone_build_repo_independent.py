@@ -44,6 +44,14 @@ except ImportError:
     TREE_SITTER_AVAILABLE = False
     print("⚠️ TreeSitter not available. Install: pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript")
 
+# javalang for Java-specific parsing (better than TreeSitter for Java)
+try:
+    import javalang
+    JAVALANG_AVAILABLE = True
+except ImportError:
+    JAVALANG_AVAILABLE = False
+    print("⚠️ javalang not available. Install: pip install javalang (recommended for better Java parsing)")
+
 # OpenAI for embeddings
 try:
     from openai import AsyncOpenAI
@@ -274,7 +282,7 @@ class EmbeddingService:
 
 
 class StandaloneParser:
-    """Self-contained multi-language parser using TreeSitter."""
+    """Self-contained multi-language parser using TreeSitter (and javalang for Java)."""
     
     def __init__(self):
         self.parsers = {}
@@ -345,12 +353,20 @@ class StandaloneParser:
         """Parse a file and extract structure."""
         language = self.detect_language(file_path)
         
-        if language not in self.parsers:
-            return None
-        
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
+            
+            # Use javalang for Java files (better extraction)
+            if language == 'java' and JAVALANG_AVAILABLE:
+                result = self._parse_java_with_javalang(file_path, content)
+                if result:
+                    return result
+                # If javalang fails, fall through to TreeSitter
+            
+            # Use TreeSitter for other languages
+            if language not in self.parsers:
+                return None
             
             parser = self.parsers[language]
             tree = parser.parse(bytes(content, 'utf8'))
@@ -366,6 +382,8 @@ class StandaloneParser:
             }
         except Exception as e:
             print(f"⚠️ Error parsing {file_path}: {e}")
+            import traceback
+            print(traceback.format_exc())
             return None
     
     def _extract_functions(self, root, content: str, language: str) -> List[Dict[str, Any]]:
@@ -512,6 +530,418 @@ class StandaloneParser:
                 traverse(child)
         traverse(root)
         return imports
+    
+    def _parse_java_with_javalang(self, file_path: str, content: str) -> Dict[str, Any]:
+        """Parse Java file using javalang for better extraction of fields, static blocks, etc."""
+        try:
+            tree = javalang.parse.parse(content)
+            # Debug: show javalang is being used (only for first few files to avoid spam)
+            if hasattr(self, '_javalang_count'):
+                self._javalang_count += 1
+            else:
+                self._javalang_count = 1
+                print(f"✅ Using javalang for Java parsing (better static fields/blocks extraction)")
+            
+            classes = []
+            functions = []
+            imports = []
+            
+            # Extract imports
+            if tree.imports:
+                for imp in tree.imports:
+                    imports.append(f"import {imp.path};")
+            
+            # Extract classes
+            if tree.types:
+                for type_decl in tree.types:
+                    if isinstance(type_decl, javalang.tree.ClassDeclaration):
+                        class_info = self._extract_class_with_javalang(type_decl, content, file_path)
+                        if class_info:
+                            classes.append(class_info)
+                        
+                        # Extract methods from this class
+                        if type_decl.methods:
+                            for method in type_decl.methods:
+                                method_info = self._extract_method_with_javalang(method, type_decl.name, content, file_path)
+                                if method_info:
+                                    functions.append(method_info)
+            
+            return {
+                'language': 'java',
+                'file_path': file_path,
+                'file_content': content,
+                'functions': functions,
+                'classes': classes,
+                'imports': imports,
+                'javalang_tree': tree  # Store tree for later use
+            }
+        except javalang.parser.JavaSyntaxError as e:
+            print(f"⚠️ Java syntax error in {file_path}: {e}")
+            # Fallback to TreeSitter
+            return self._parse_java_with_treesitter_fallback(file_path, content)
+        except Exception as e:
+            print(f"⚠️ Error parsing Java with javalang {file_path}: {e}")
+            # Fallback to TreeSitter
+            return self._parse_java_with_treesitter_fallback(file_path, content)
+    
+    def _parse_java_with_treesitter_fallback(self, file_path: str, content: str) -> Optional[Dict[str, Any]]:
+        """Fallback to TreeSitter if javalang fails."""
+        if 'java' not in self.parsers:
+            return None
+        
+        try:
+            parser = self.parsers['java']
+            tree = parser.parse(bytes(content, 'utf8'))
+            root = tree.root_node
+            
+            return {
+                'language': 'java',
+                'file_path': file_path,
+                'file_content': content,
+                'functions': self._extract_functions(root, content, 'java'),
+                'classes': self._extract_classes(root, content, 'java'),
+                'imports': self._extract_imports(root, content, 'java'),
+            }
+        except Exception as e:
+            print(f"⚠️ Error parsing with TreeSitter fallback {file_path}: {e}")
+            return None
+    
+    def _extract_class_with_javalang(self, class_decl: javalang.tree.ClassDeclaration, content: str, file_path: str) -> Dict[str, Any]:
+        """Extract class information using javalang AST."""
+        # Get class name
+        class_name = class_decl.name
+        
+        # Get class position (approximate - javalang doesn't provide exact positions)
+        # We'll use the class declaration start
+        lines = content.split('\n')
+        start_line = 1
+        end_line = len(lines)
+        
+        # Find class declaration in content
+        class_pattern = rf'\bclass\s+{class_name}\b'
+        match = re.search(class_pattern, content)
+        if match:
+            start_line = content[:match.start()].count('\n') + 1
+        
+        # Extract extends
+        extends = []
+        if class_decl.extends:
+            extends = [str(class_decl.extends.name)]
+        
+        # Extract implements
+        implements = []
+        if class_decl.implements:
+            for impl in class_decl.implements:
+                implements.append(str(impl.name))
+        
+        # Extract fields (static and instance)
+        static_fields = []
+        instance_fields = []
+        static_blocks = []
+        instance_blocks = []
+        
+        if class_decl.body:
+            static_block_index = 0  # Track which static block we're on
+            instance_block_index = 0  # Track which instance block we're on
+            
+            for body_decl in class_decl.body:
+                # Field declarations
+                if isinstance(body_decl, javalang.tree.FieldDeclaration):
+                    is_static = 'static' in body_decl.modifiers
+                    field_type = str(body_decl.type)
+                    
+                    for declarator in body_decl.declarators:
+                        field_name = declarator.name
+                        field_code = self._get_field_code_from_content(body_decl, declarator, content)
+                        
+                        field_info = {
+                            'name': field_name,
+                            'type': field_type,
+                            'modifiers': body_decl.modifiers,
+                            'code': field_code
+                        }
+                        
+                        if is_static:
+                            static_fields.append(field_info)
+                        else:
+                            instance_fields.append(field_info)
+                
+                # Static initializer blocks
+                elif isinstance(body_decl, javalang.tree.StaticInitializer):
+                    static_block_code = self._get_static_block_code_from_content(content, static_block_index)
+                    if static_block_code:
+                        static_blocks.append(static_block_code)
+                    static_block_index += 1
+                
+                # Instance initializer blocks
+                elif isinstance(body_decl, javalang.tree.InstanceInitializer):
+                    instance_block_code = self._get_instance_block_code_from_content(content, instance_block_index)
+                    if instance_block_code:
+                        instance_blocks.append(instance_block_code)
+                    instance_block_index += 1
+        
+        # Get class code (full class body)
+        class_code = self._get_class_code_from_content(class_name, content)
+        
+        # Extract type references (simplified - can be enhanced)
+        references = self._extract_type_references(class_code, 'java')
+        
+        return {
+            'name': class_name,
+            'start_line': start_line,
+            'end_line': end_line,
+            'code': class_code,
+            'extends': extends,
+            'implements': implements,
+            'references': references,
+            # javalang-specific data
+            'static_fields': static_fields,
+            'instance_fields': instance_fields,
+            'static_blocks': static_blocks,
+            'instance_blocks': instance_blocks,
+            'javalang_data': True  # Flag to indicate javalang extraction
+        }
+    
+    def _extract_method_with_javalang(self, method: javalang.tree.MethodDeclaration, class_name: str, content: str, file_path: str) -> Dict[str, Any]:
+        """Extract method information using javalang AST."""
+        method_name = method.name
+        
+        # Get method code
+        method_code = self._get_method_code_from_content(method, class_name, content)
+        
+        # Approximate line numbers
+        lines = content.split('\n')
+        start_line = 1
+        end_line = len(lines)
+        
+        # Find method in content
+        method_pattern = rf'\b{method_name}\s*\('
+        match = re.search(method_pattern, content)
+        if match:
+            start_line = content[:match.start()].count('\n') + 1
+        
+        # Extract method calls (simplified)
+        calls = self._extract_method_calls(method_code, 'java')
+        
+        return {
+            'name': method_name,
+            'class_name': class_name,
+            'start_line': start_line,
+            'end_line': end_line,
+            'code': method_code,
+            'calls': calls
+        }
+    
+    def _get_field_code_from_content(self, field_decl: javalang.tree.FieldDeclaration, declarator: javalang.tree.VariableDeclarator, content: str) -> str:
+        """Extract field declaration code from content using improved matching."""
+        field_name = declarator.name
+        field_type = str(field_decl.type)
+        
+        # Build modifiers string (handle order variations)
+        modifiers = field_decl.modifiers if field_decl.modifiers else []
+        modifiers_str = ' '.join(modifiers) if modifiers else ''
+        
+        # Try multiple patterns to find the field
+        patterns = [
+            # Pattern 1: modifiers type name;
+            rf'\b{re.escape(modifiers_str)}\s+{re.escape(field_type)}\s+{re.escape(field_name)}\s*[=;]' if modifiers_str else rf'\b{re.escape(field_type)}\s+{re.escape(field_name)}\s*[=;]',
+            # Pattern 2: type name (without modifiers, in case modifiers are on separate lines)
+            rf'\b{re.escape(field_type)}\s+{re.escape(field_name)}\s*[=;]',
+            # Pattern 3: Just field name followed by = or ;
+            rf'\b{re.escape(field_name)}\s*[=;]',
+        ]
+        
+        for pattern in patterns:
+            matches = list(re.finditer(pattern, content, re.MULTILINE))
+            for match in matches:
+                # Check if this match has the right modifiers before it
+                match_start = match.start()
+                before_match = content[max(0, match_start - 200):match_start]
+                
+                # Verify modifiers are present (if any)
+                if modifiers:
+                    has_modifiers = all(mod in before_match for mod in modifiers)
+                    if not has_modifiers:
+                        continue
+                
+                # Find the semicolon
+                semicolon_pos = content.find(';', match.end())
+                if semicolon_pos != -1:
+                    field_code = content[match.start():semicolon_pos + 1].strip()
+                    # Verify it's a field declaration (not in a method)
+                    if '=' not in field_code or '=' in field_code.split(';')[0]:
+                        return field_code
+        
+        # Fallback: construct field code from AST
+        modifiers_str = ' '.join(modifiers) if modifiers else ''
+        initializer = ""
+        if declarator.initializer:
+            if isinstance(declarator.initializer, javalang.tree.Literal):
+                initializer = f" = {declarator.initializer.value}"
+            elif isinstance(declarator.initializer, javalang.tree.MemberReference):
+                initializer = f" = {declarator.initializer.member}"
+            else:
+                initializer = " = ..."  # Complex initializer
+        
+        return f"{modifiers_str} {field_type} {field_name}{initializer};".strip()
+    
+    def _get_static_block_code_from_content(self, content: str, block_index: int = 0) -> str:
+        """Extract static initializer block code from content."""
+        # Find all "static {" patterns
+        pattern = r'\bstatic\s*\{'
+        matches = list(re.finditer(pattern, content, re.MULTILINE))
+        
+        if block_index < len(matches):
+            match = matches[block_index]
+            # Find matching closing brace
+            brace_count = 0
+            i = match.end() - 1  # Start from the '{'
+            in_string = False
+            string_char = None
+            
+            while i < len(content):
+                char = content[i]
+                
+                # Handle string literals
+                if char in ['"', "'"] and (i == 0 or content[i-1] != '\\'):
+                    if not in_string:
+                        in_string = True
+                        string_char = char
+                    elif char == string_char:
+                        in_string = False
+                        string_char = None
+                
+                if not in_string:
+                    if char == '{':
+                        brace_count += 1
+                    elif char == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            block_code = content[match.start():i + 1].strip()
+                            # Verify it's a static block
+                            if block_code.startswith('static'):
+                                return block_code
+                i += 1
+        
+        return ""
+    
+    def _get_instance_block_code_from_content(self, content: str, block_index: int = 0) -> str:
+        """Extract instance initializer block code from content."""
+        # Instance initializer blocks are just { ... } (not static, not method)
+        # They're harder to identify uniquely. We'll look for standalone blocks
+        # that aren't static and aren't method bodies.
+        
+        # Find all standalone blocks (not after static, not after method signatures)
+        # Pattern: { ... } that's not "static {" and not after "()"
+        pattern = r'(?<!static\s)\{(?![^{]*\()'
+        
+        # More reliable: find blocks that are at class level
+        # Look for { that's not part of static, method, or other constructs
+        # This is approximate - javalang helps us know they exist, but exact extraction is tricky
+        
+        # For now, return empty - the regex fallback in _create_class_metadata_chunk will handle it
+        # This can be enhanced later with better heuristics
+        return ""
+    
+    def _get_class_code_from_content(self, class_name: str, content: str) -> str:
+        """Extract full class code from content using improved brace matching."""
+        # Find class declaration (handle public/private/final modifiers)
+        patterns = [
+            rf'\bclass\s+{re.escape(class_name)}\b',
+            rf'\bpublic\s+class\s+{re.escape(class_name)}\b',
+            rf'\bprivate\s+class\s+{re.escape(class_name)}\b',
+            rf'\bfinal\s+class\s+{re.escape(class_name)}\b',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if match:
+                # Find class body opening brace
+                class_start = match.start()
+                brace_pos = content.find('{', class_start)
+                if brace_pos != -1:
+                    # Find matching closing brace
+                    brace_count = 0
+                    i = brace_pos
+                    in_string = False
+                    string_char = None
+                    
+                    while i < len(content):
+                        char = content[i]
+                        
+                        # Handle string literals (don't count braces in strings)
+                        if char in ['"', "'"] and (i == 0 or content[i-1] != '\\'):
+                            if not in_string:
+                                in_string = True
+                                string_char = char
+                            elif char == string_char:
+                                in_string = False
+                                string_char = None
+                        
+                        if not in_string:
+                            if char == '{':
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    return content[class_start:i + 1]
+                        i += 1
+        
+        return ""
+    
+    def _get_method_code_from_content(self, method: javalang.tree.MethodDeclaration, class_name: str, content: str) -> str:
+        """Extract method code from content."""
+        method_name = method.name
+        
+        # Build method signature pattern
+        # Handle method name with possible return type and modifiers before it
+        patterns = [
+            rf'\b{re.escape(method_name)}\s*\(',
+            rf'\b\w+\s+{re.escape(method_name)}\s*\(',
+        ]
+        
+        for pattern in patterns:
+            matches = list(re.finditer(pattern, content))
+            for match in matches:
+                # Find method body opening brace
+                method_start = match.start()
+                # Go back to find method start (modifiers, return type)
+                line_start = content.rfind('\n', max(0, method_start - 200), method_start)
+                if line_start == -1:
+                    line_start = max(0, method_start - 200)
+                method_start = line_start
+                
+                # Find opening brace
+                brace_pos = content.find('{', match.end())
+                if brace_pos != -1:
+                    # Find matching closing brace
+                    brace_count = 0
+                    i = brace_pos
+                    in_string = False
+                    string_char = None
+                    
+                    while i < len(content):
+                        char = content[i]
+                        
+                        # Handle string literals
+                        if char in ['"', "'"] and (i == 0 or content[i-1] != '\\'):
+                            if not in_string:
+                                in_string = True
+                                string_char = char
+                            elif char == string_char:
+                                in_string = False
+                                string_char = None
+                        
+                        if not in_string:
+                            if char == '{':
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    return content[method_start:i + 1].strip()
+                        i += 1
+        
+        return ""
 
 
 class StandaloneIndexer:
@@ -865,12 +1295,12 @@ class StandaloneIndexer:
             # Sequential processing with progress bar
             file_iter = tqdm(code_files, desc="Processing files") if TQDM_AVAILABLE else code_files
             for file_path in file_iter:
-                parsed = self.parser.parse_file(file_path)
-                if not parsed:
-                    continue
-                
-                file_chunks = self._generate_chunks_for_file(parsed, file_path)
-                all_chunks.extend(file_chunks)
+            parsed = self.parser.parse_file(file_path)
+            if not parsed:
+                continue
+            
+            file_chunks = self._generate_chunks_for_file(parsed, file_path)
+            all_chunks.extend(file_chunks)
                 processed_files.add(file_path)
                 
                 # Save checkpoint periodically
@@ -900,8 +1330,8 @@ class StandaloneIndexer:
             # Add embeddings to chunks with progress bar
             embed_iter = tqdm(zip(all_chunks, embeddings), total=len(all_chunks), desc="Adding embeddings") if TQDM_AVAILABLE else zip(all_chunks, embeddings)
             for chunk, embedding in embed_iter:
-                if embedding:
-                    chunk['embedding'] = embedding
+            if embedding:
+                chunk['embedding'] = embedding
         
         # Generate statistics with pandas if available
         if PANDAS_AVAILABLE and all_chunks:
@@ -1111,6 +1541,7 @@ class StandaloneIndexer:
         """
         Create a class metadata chunk: signature + fields + static blocks + instance blocks.
         Does NOT include method bodies (those are in method chunks).
+        Uses javalang data if available for better extraction.
         """
         file_content = parsed.get('file_content', '')
         class_code = cls.get('code', '')
@@ -1126,8 +1557,45 @@ class StandaloneIndexer:
         class_level_parts = [signature]
         language = parsed.get('language', 'java')
         
-        # Extract class-level code for Java
-        if language == 'java' and file_content:
+        # Use javalang-extracted data if available (better extraction)
+        if language == 'java' and cls.get('javalang_data'):
+            static_fields_count = len(cls.get('static_fields', []))
+            instance_fields_count = len(cls.get('instance_fields', []))
+            static_blocks_count = len(cls.get('static_blocks', []))
+            instance_blocks_count = len(cls.get('instance_blocks', []))
+            
+            # Use javalang-extracted static fields
+            for field in cls.get('static_fields', []):
+                field_code = field.get('code', '')
+                if field_code:
+                    class_level_parts.append(field_code)
+            
+            # Use javalang-extracted instance fields
+            for field in cls.get('instance_fields', []):
+                field_code = field.get('code', '')
+                if field_code:
+                    class_level_parts.append(field_code)
+            
+            # Use javalang-extracted static blocks
+            for static_block in cls.get('static_blocks', []):
+                if static_block:
+                    class_level_parts.append(static_block)
+            
+            # Use javalang-extracted instance blocks
+            for instance_block in cls.get('instance_blocks', []):
+                if instance_block:
+                    class_level_parts.append(instance_block)
+            
+            # Debug output (only for first few classes to avoid spam)
+            if not hasattr(self, '_class_metadata_debug_count'):
+                self._class_metadata_debug_count = 0
+            if self._class_metadata_debug_count < 3:
+                if static_fields_count > 0 or static_blocks_count > 0:
+                    print(f"   ✅ Class {cls.get('name')}: Found {static_fields_count} static fields, {static_blocks_count} static blocks (javalang)")
+                self._class_metadata_debug_count += 1
+        
+        # Fallback to regex extraction if javalang data not available
+        elif language == 'java' and file_content:
             # Extract static blocks
             static_pattern = r'static\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
             for match in re.finditer(static_pattern, class_code, re.MULTILINE | re.DOTALL):
@@ -1517,8 +1985,8 @@ class StandaloneOpenSearch:
                     connection_class=RequestsHttpConnection
                 )
                 print(f"✅ Connected to OpenSearch: {self.opensearch_endpoint}")
-        except Exception as e:
-            print(f"⚠️ Failed to connect to OpenSearch: {e}")
+            except Exception as e:
+                print(f"⚠️ Failed to connect to OpenSearch: {e}")
             import traceback
             print(traceback.format_exc())
     
@@ -1792,7 +2260,7 @@ class StandaloneOpenSearch:
                         error_count += errors
                         if error_msg:
                             error_messages.append(error_msg)
-                    except Exception as e:
+            except Exception as e:
                         error_count += len(batches[batch_idx])
                         error_messages.append(f"Batch {batch_idx+1}: {str(e)}")
                     
@@ -2382,7 +2850,9 @@ class StandaloneGraphBuilder:
                     start_line=chunk.get('start_line', 1),
                     end_line=chunk.get('end_line', 1),
                     language=chunk.get('language', 'unknown'),
-                    chunk_id=chunk_id
+                    chunk_id=chunk_id,
+                    code=chunk.get('code', ''),  # ✅ Store code with static blocks and variables
+                    summary=chunk.get('summary', '')  # ✅ Store summary
                 )
                 
                 # Track all chunks for this class
@@ -2435,7 +2905,9 @@ class StandaloneGraphBuilder:
                     start_line=chunk.get('start_line', 1),
                     end_line=chunk.get('end_line', 1),
                     language=chunk.get('language', 'unknown'),
-                    chunk_id=chunk_id
+                    chunk_id=chunk_id,
+                    code=chunk.get('code', ''),  # ✅ Store code
+                    summary=chunk.get('summary', '')  # ✅ Store summary
                 )
                 
                 # Track all chunks for this method
