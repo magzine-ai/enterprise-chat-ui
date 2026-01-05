@@ -1660,11 +1660,42 @@ class StandaloneIndexer:
         class_code = cls.get('code', '')
         lines = file_content.split('\n') if file_content else class_code.split('\n')
         start_line = cls.get('start_line', 1)
+        class_name = cls.get('name', '')
         
-        # Extract class signature
-        signature = class_code.split('{')[0] if '{' in class_code else class_code[:200]
-        if '{' in class_code:
+        # Extract class signature - try from class_code first, then from file_content
+        signature = ""
+        if class_code and '{' in class_code:
+            # Extract signature from class_code
+            signature = class_code.split('{')[0].strip()
             signature += ' {'
+        elif file_content and class_name:
+            # Extract signature directly from source content
+            # Look for class declaration with modifiers
+            escaped_name = re.escape(class_name)
+            
+            # Pattern 1: Class with modifiers and extends/implements
+            pattern1 = rf'\b(?:public|private|protected|abstract|final|static\s+)*class\s+{escaped_name}\s*(?:extends\s+\w+)?\s*(?:implements\s+[^{{]+)?\s*\{{'
+            match = re.search(pattern1, file_content, re.MULTILINE)
+            if match:
+                # Extract from match start to opening brace
+                brace_pos = file_content.find('{', match.start())
+                if brace_pos != -1:
+                    signature = file_content[match.start():brace_pos + 1].strip()
+            
+            # Pattern 2: Simple class declaration (fallback)
+            if not signature:
+                pattern2 = rf'\bclass\s+{escaped_name}\b'
+                match = re.search(pattern2, file_content)
+                if match:
+                    # Find the opening brace
+                    brace_pos = file_content.find('{', match.end())
+                    if brace_pos != -1:
+                        # Get everything from match start to brace, including extends/implements
+                        signature = file_content[match.start():brace_pos + 1].strip()
+        
+        # Final fallback if signature is still empty
+        if not signature:
+            signature = f"class {class_name} {{" if class_name else "class {"
         
         # Build class-level code parts
         class_level_parts = [signature]
