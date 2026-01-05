@@ -813,10 +813,41 @@ class StandaloneParser:
                     if not has_modifiers:
                         continue
                 
+                # Find the actual start of the field declaration (including modifiers)
+                # Search backwards from match_start to find the beginning of the declaration
+                field_start = match_start
+                if modifiers:
+                    # Find the start of the current line
+                    line_start = content.rfind('\n', max(0, match_start - 200), match_start)
+                    if line_start == -1:
+                        line_start = max(0, match_start - 200)
+                    else:
+                        line_start += 1  # Start after the newline
+                    
+                    # Get the line content before the match
+                    line_content = content[line_start:match_start]
+                    
+                    # Find where modifiers start on this line
+                    # Look for all modifiers in order (they should appear together)
+                    modifier_positions = []
+                    for mod in modifiers:
+                        mod_pos = line_content.find(mod)
+                        if mod_pos != -1:
+                            # Check if this is a complete word (not part of another word)
+                            if (mod_pos == 0 or not line_content[mod_pos - 1].isalnum()) and \
+                               (mod_pos + len(mod) >= len(line_content) or not line_content[mod_pos + len(mod)].isalnum()):
+                                modifier_positions.append((mod_pos, mod))
+                    
+                    # If we found modifiers, use the earliest position
+                    if modifier_positions:
+                        modifier_positions.sort()  # Sort by position
+                        earliest_mod_pos, _ = modifier_positions[0]
+                        field_start = line_start + earliest_mod_pos
+                
                 # Find the semicolon
                 semicolon_pos = content.find(';', match.end())
                 if semicolon_pos != -1:
-                    field_code = content[match.start():semicolon_pos + 1].strip()
+                    field_code = content[field_start:semicolon_pos + 1].strip()
                     # Verify it's a field declaration (not in a method)
                     if '=' not in field_code or '=' in field_code.split(';')[0]:
                         return field_code
