@@ -1717,15 +1717,8 @@ class StandaloneIndexer:
         # Combine all parts
         class_metadata_code = '\n'.join(class_level_parts)
         
-        # Enforce size limit if needed
-        if self.enforce_chunk_size and len(class_metadata_code) > self.max_chunk_size:
-            # Truncate but keep signature
-            remaining_size = self.max_chunk_size - len(signature) - 50
-            if remaining_size > 0:
-                truncated = class_metadata_code[:self.max_chunk_size]
-                class_metadata_code = truncated + "\n// ... (truncated)"
-            else:
-                class_metadata_code = signature  # Fallback to just signature if too large
+        # Note: Chunk size enforcement is NOT applied to class chunks
+        # Class chunks can be any size to preserve all class-level metadata
         
         # Calculate end line
         code_lines = class_metadata_code.split('\n')
