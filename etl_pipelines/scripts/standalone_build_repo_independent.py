@@ -641,9 +641,72 @@ class StandaloneParser:
         instance_blocks = []
         
         if class_decl.body:
-            static_block_index = 0  # Track which static block we're on
-            instance_block_index = 0  # Track which instance block we're on
+            # Extract static and instance initializers from source code
+            # javalang doesn't have explicit StaticInitializer/InstanceInitializer classes,
+            # so we detect them from the source code using regex patterns
             
+            # Find all static blocks in the class
+            static_pattern = r'\bstatic\s*\{'
+            static_matches = list(re.finditer(static_pattern, content, re.MULTILINE))
+            for match in static_matches:
+                static_block_code = self._get_static_block_code_from_content(content, static_matches.index(match))
+                if static_block_code:
+                    static_blocks.append(static_block_code)
+            
+            # Find all instance initializer blocks (standalone { } blocks that aren't static or methods)
+            # This is approximate - we'll extract them from the class body
+            # Note: Instance initializer detection is complex, so we use a simpler approach
+            # that extracts blocks that look like instance initializers
+            instance_block_index = 0
+            class_start_pos = content.find(f'class {class_name}')
+            if class_start_pos != -1:
+                class_brace_pos = content.find('{', class_start_pos)
+                if class_brace_pos != -1:
+                    # Find matching closing brace for class
+                    brace_count = 0
+                    class_end_pos = class_brace_pos
+                    in_string = False
+                    string_char = None
+                    for i in range(class_brace_pos, len(content)):
+                        char = content[i]
+                        # Handle string literals
+                        if char in ['"', "'"] and (i == 0 or content[i-1] != '\\'):
+                            if not in_string:
+                                in_string = True
+                                string_char = char
+                            elif char == string_char:
+                                in_string = False
+                                string_char = None
+                        
+                        if not in_string:
+                            if char == '{':
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    class_end_pos = i
+                                    break
+                    
+                    # Look for standalone blocks (not static, not methods) within class body
+                    # Pattern: { ... } that's not preceded by "static" or ")"
+                    for i in range(class_brace_pos + 1, class_end_pos):
+                        if content[i] == '{':
+                            # Check if this is a static block
+                            before_brace = content[max(0, i - 20):i].rstrip()
+                            if 'static' in before_brace and before_brace.endswith('static'):
+                                continue  # Skip static blocks
+                            
+                            # Check if this is a method (preceded by ")")
+                            if before_brace.rstrip().endswith(')'):
+                                continue  # Skip method bodies
+                            
+                            # This might be an instance initializer - extract the block
+                            instance_block_code = self._extract_block_at_position(content, i)
+                            if instance_block_code and len(instance_block_code) > 2:  # More than just {}
+                                instance_blocks.append(instance_block_code)
+                                instance_block_index += 1
+            
+            # Extract fields from AST
             for body_decl in class_decl.body:
                 # Field declarations
                 if isinstance(body_decl, javalang.tree.FieldDeclaration):
@@ -665,20 +728,6 @@ class StandaloneParser:
                             static_fields.append(field_info)
                         else:
                             instance_fields.append(field_info)
-                
-                # Static initializer blocks
-                elif isinstance(body_decl, javalang.tree.StaticInitializer):
-                    static_block_code = self._get_static_block_code_from_content(content, static_block_index)
-                    if static_block_code:
-                        static_blocks.append(static_block_code)
-                    static_block_index += 1
-                
-                # Instance initializer blocks
-                elif isinstance(body_decl, javalang.tree.InstanceInitializer):
-                    instance_block_code = self._get_instance_block_code_from_content(content, instance_block_index)
-                    if instance_block_code:
-                        instance_blocks.append(instance_block_code)
-                    instance_block_index += 1
         
         # Get class code (full class body)
         class_code = self._get_class_code_from_content(class_name, content)
@@ -842,6 +891,39 @@ class StandaloneParser:
         # For now, return empty - the regex fallback in _create_class_metadata_chunk will handle it
         # This can be enhanced later with better heuristics
         return ""
+    
+    def _extract_block_at_position(self, content: str, start_pos: int) -> str:
+        """Extract a code block (braces) starting at the given position."""
+        if start_pos >= len(content) or content[start_pos] != '{':
+            return ""
+        
+        brace_count = 0
+        i = start_pos
+        in_string = False
+        string_char = None
+        
+        while i < len(content):
+            char = content[i]
+            
+            # Handle string literals
+            if char in ['"', "'"] and (i == 0 or content[i-1] != '\\'):
+                if not in_string:
+                    in_string = True
+                    string_char = char
+                elif char == string_char:
+                    in_string = False
+                    string_char = None
+            
+            if not in_string:
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        return content[start_pos:i + 1].strip()
+            i += 1
+        
+        return ""  # Unclosed block
     
     def _get_class_code_from_content(self, class_name: str, content: str) -> str:
         """Extract full class code from content using improved brace matching."""
