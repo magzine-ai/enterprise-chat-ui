@@ -1,0 +1,32 @@
+# Google ADK and Core Dependencies
+google-cloud-aiplatform>=1.38.0
+google-generativeai>=0.3.0
+
+# Agent Framework
+langchain>=0.1.0
+langchain-google-genai>=0.0.5
+
+# Configuration Parsing
+pyyaml>=6.0
+jsonschema>=4.20.0
+
+# Workflow Engine
+networkx>=3.0
+graphlib-backport>=1.0.3; python_version < "3.9"
+
+# Utilities
+python-dotenv>=1.0.0
+click>=8.1.0
+rich>=13.0.0
+pydantic>=2.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# Development
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
+

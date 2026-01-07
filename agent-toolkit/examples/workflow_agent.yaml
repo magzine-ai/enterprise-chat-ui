@@ -1,0 +1,61 @@
+name: "WorkflowAgent"
+description: "A workflow agent with conditional logic"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    threshold: 10
+    data_value: 15
+  
+  steps:
+    - name: "initial_log"
+      type: "action"
+      action: "log"
+      parameters:
+        level: "info"
+        message: "Starting workflow execution"
+    
+    - name: "process_data"
+      type: "action"
+      action: "process"
+      parameters:
+        input: "{{data_value}}"
+      depends_on:
+        - "initial_log"
+    
+    - name: "check_threshold"
+      type: "condition"
+      condition: "{{data_value}} > {{threshold}}"
+      on_true:
+        - name: "success_path"
+          type: "action"
+          action: "notify"
+          parameters:
+            status: "success"
+            message: "Value exceeds threshold"
+        - name: "log_success"
+          type: "action"
+          action: "log"
+          parameters:
+            level: "success"
+            message: "Condition met: value is above threshold"
+      on_false:
+        - name: "failure_path"
+          type: "action"
+          action: "notify"
+          parameters:
+            status: "warning"
+            message: "Value does not exceed threshold"
+      depends_on:
+        - "process_data"
+    
+    - name: "final_log"
+      type: "action"
+      action: "log"
+      parameters:
+        level: "info"
+        message: "Workflow execution completed"
+      depends_on:
+        - "check_threshold"
+

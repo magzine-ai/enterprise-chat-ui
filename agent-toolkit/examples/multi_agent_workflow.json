@@ -1,0 +1,80 @@
+{
+  "name": "MultiAgentWorkflow",
+  "description": "A complex workflow demonstrating parallel execution and multiple agents",
+  "type": "workflow",
+  "version": "1.0.0",
+  "workflow": {
+    "variables": {
+      "parallel_count": 3,
+      "items": ["item1", "item2", "item3"]
+    },
+    "steps": [
+      {
+        "name": "start_workflow",
+        "type": "action",
+        "action": "log",
+        "parameters": {
+          "level": "info",
+          "message": "Starting multi-agent workflow"
+        }
+      },
+      {
+        "name": "parallel_processing",
+        "type": "parallel",
+        "parallel": [
+          {
+            "name": "process_item1",
+            "type": "action",
+            "action": "process",
+            "parameters": {
+              "input": "{{items[0]}}"
+            }
+          },
+          {
+            "name": "process_item2",
+            "type": "action",
+            "action": "process",
+            "parameters": {
+              "input": "{{items[1]}}"
+            }
+          },
+          {
+            "name": "process_item3",
+            "type": "action",
+            "action": "process",
+            "parameters": {
+              "input": "{{items[2]}}"
+            }
+          }
+        ],
+        "depends_on": ["start_workflow"]
+      },
+      {
+        "name": "aggregate_results",
+        "type": "action",
+        "action": "transform",
+        "parameters": {
+          "data": "{{parallel_processing.output}}",
+          "transformation": "uppercase"
+        },
+        "depends_on": ["parallel_processing"]
+      },
+      {
+        "name": "final_notification",
+        "type": "action",
+        "action": "notify",
+        "parameters": {
+          "status": "success",
+          "message": "Multi-agent workflow completed"
+        },
+        "depends_on": ["aggregate_results"]
+      }
+    ],
+    "error_handling": {
+      "stop_on_error": false,
+      "retry_on_failure": true,
+      "max_retries": 3
+    }
+  }
+}
+

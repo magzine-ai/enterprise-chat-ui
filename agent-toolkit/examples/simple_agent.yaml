@@ -1,0 +1,33 @@
+name: "SimpleAgent"
+description: "A simple demonstration agent"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    greeting: "Hello from Agent Toolkit!"
+  
+  steps:
+    - name: "greet_step"
+      type: "action"
+      action: "greet"
+      parameters:
+        message: "{{greeting}}"
+    
+    - name: "process_step"
+      type: "action"
+      action: "process"
+      parameters:
+        input: "Sample data to process"
+      depends_on:
+        - "greet_step"
+    
+    - name: "notify_step"
+      type: "action"
+      action: "notify"
+      parameters:
+        status: "success"
+        message: "Workflow completed successfully"
+      depends_on:
+        - "process_step"
+
