@@ -411,7 +411,7 @@ class StandaloneParser:
                         'calls': calls
                     })
             else:
-                for child in node.children:
+            for child in node.children:
                     traverse(child, parent_class)
         
         traverse(root)
@@ -1074,7 +1074,9 @@ class StandaloneIndexer:
         use_azure_embeddings: bool = False,
         user_sid: str = "default_user",
         azure_cert_path: Optional[str] = None,
-        azure_config_path: Optional[str] = None
+        azure_config_path: Optional[str] = None,
+        application_name: Optional[str] = None,
+        seal_id: Optional[str] = None
     ):
         self.parser = StandaloneParser()
         self.embedding_client = None
@@ -1090,6 +1092,9 @@ class StandaloneIndexer:
         self.use_azure_embeddings = use_azure_embeddings
         self.repo_path = None  # Will be set when processing starts
         self.module_map = {}  # Cache for module mapping (file_path -> module_name)
+        self.application_name = application_name or ''
+        self.seal_id = seal_id or ''
+        self.project_id = f"{self.application_name}:{self.seal_id}" if (self.application_name and self.seal_id) else ''
         
         # Initialize embedding service (Azure or OpenAI)
         if use_azure_embeddings and AZURE_EMBEDDINGS_AVAILABLE:
@@ -1220,6 +1225,127 @@ class StandaloneIndexer:
         content_hash = hashlib.sha256(content_string.encode()).hexdigest()
         
         return f"content_{content_hash}"
+    
+    def _extract_package_name(self, parsed: Dict[str, Any], file_path: str) -> str:
+        """Extract package name from parsed file data or infer from file path."""
+        # Try to extract from imports (Java)
+        imports = parsed.get('imports', [])
+        for imp in imports:
+            if 'package' in imp.lower():
+                # Extract package name from "package com.example;"
+                match = re.search(r'package\s+([\w.]+)', imp)
+                if match:
+                    return match.group(1)
+        
+        # Infer from file path (Java convention: src/main/java/com/example/Class.java -> com.example)
+        if file_path.endswith('.java'):
+            # Look for common Java source directories
+            java_patterns = [
+                r'src/main/java/(.+?)/[^/]+\.java$',
+                r'src/(.+?)/[^/]+\.java$',
+                r'java/(.+?)/[^/]+\.java$',
+            ]
+            for pattern in java_patterns:
+                match = re.search(pattern, file_path.replace('\\', '/'))
+                if match:
+                    package_path = match.group(1).replace('/', '.')
+                    return package_path
+        
+        return ''
+    
+    def _extract_method_signature(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> str:
+        """Extract method signature (return type + method name + parameters)."""
+        method_code = func.get('code', '')
+        method_name = func.get('name', '')
+        
+        if not method_code:
+            return method_name
+        
+        # Try to extract signature from method code
+        # Pattern: modifiers return_type method_name(parameters)
+        # Look for method declaration line
+        lines = method_code.split('\n')
+        if lines:
+            first_line = lines[0].strip()
+            # Find opening parenthesis
+            paren_pos = first_line.find('(')
+            if paren_pos > 0:
+                # Extract everything before the opening parenthesis
+                signature_part = first_line[:paren_pos].strip()
+                # Find method name (last word before parenthesis)
+                parts = signature_part.split()
+                if parts:
+                    # Method name is typically the last identifier before (
+                    method_name_part = parts[-1] if parts else method_name
+                    # Try to find return type (second to last if present)
+                    if len(parts) > 1:
+                        return_type = parts[-2] if len(parts) > 1 else 'void'
+                    else:
+                        return_type = 'void'
+                    
+                    # Extract parameters
+                    paren_end = method_code.find(')', paren_pos)
+                    if paren_end > paren_pos:
+                        params = method_code[paren_pos + 1:paren_end].strip()
+                    else:
+                        params = ''
+                    
+                    return f"{return_type} {method_name_part}({params})"
+        
+        # Fallback: just method name
+        return method_name
+    
+    def _generate_lookup_hash_for_method(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> str:
+        """
+        Generate lookup_hash for method chunk: hash(project_id + method_signature + method_fqcn).
+        
+        Args:
+            func: Function/method dictionary
+            parsed: Parsed file data
+            file_path: File path
+            
+        Returns:
+            lookup_hash string
+        """
+        if not self.project_id:
+            return ''
+        
+        method_signature = self._extract_method_signature(func, parsed, file_path)
+        method_fqcn = func.get('fqn', '') or f"{Path(file_path).stem}.{func.get('name', '')}"
+        
+        # Combine: project_id + method_signature + method_fqcn
+        lookup_string = f"{self.project_id}:{method_signature}:{method_fqcn}"
+        
+        # Generate hash
+        lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]  # 16-char hex
+        
+        return f"lookup_{lookup_hash}"
+    
+    def _generate_lookup_hash_for_class(self, cls: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> str:
+        """
+        Generate lookup_hash for class chunk: hash(project_id + package + classname).
+        
+        Args:
+            cls: Class dictionary
+            parsed: Parsed file data
+            file_path: File path
+            
+        Returns:
+            lookup_hash string
+        """
+        if not self.project_id:
+            return ''
+        
+        package = self._extract_package_name(parsed, file_path)
+        classname = cls.get('name', '')
+        
+        # Combine: project_id + package + classname
+        lookup_string = f"{self.project_id}:{package}:{classname}"
+        
+        # Generate hash
+        lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]  # 16-char hex
+        
+        return f"lookup_{lookup_hash}"
     
     def _get_filetype(self, file_path: str) -> str:
         """Extract file extension (filetype) from file path."""
@@ -1408,12 +1534,12 @@ class StandaloneIndexer:
             # Sequential processing with progress bar
             file_iter = tqdm(code_files, desc="Processing files") if TQDM_AVAILABLE else code_files
             for file_path in file_iter:
-                parsed = self.parser.parse_file(file_path)
-                if not parsed:
-                    continue
-                
-                file_chunks = self._generate_chunks_for_file(parsed, file_path)
-                all_chunks.extend(file_chunks)
+            parsed = self.parser.parse_file(file_path)
+            if not parsed:
+                continue
+            
+            file_chunks = self._generate_chunks_for_file(parsed, file_path)
+            all_chunks.extend(file_chunks)
                 processed_files.add(file_path)
                 
                 # Save checkpoint periodically
@@ -1443,8 +1569,8 @@ class StandaloneIndexer:
             # Add embeddings to chunks with progress bar
             embed_iter = tqdm(zip(all_chunks, embeddings), total=len(all_chunks), desc="Adding embeddings") if TQDM_AVAILABLE else zip(all_chunks, embeddings)
             for chunk, embedding in embed_iter:
-                if embedding:
-                    chunk['embedding'] = embedding
+            if embedding:
+                chunk['embedding'] = embedding
         
         # Generate statistics with pandas if available
         if PANDAS_AVAILABLE and all_chunks:
@@ -1617,6 +1743,15 @@ class StandaloneIndexer:
             # Generate unique chunk_id and _id
             chunk['chunk_id'] = self._generate_chunk_id(chunk)
             chunk['_id'] = self._generate_chunk_content_id(chunk)
+            
+            # Generate lookup_hash for file chunks
+            if self.project_id:
+                file_lookup_string = f"{self.project_id}:{relative_path}"
+                file_lookup_hash = hashlib.sha256(file_lookup_string.encode()).hexdigest()[:16]
+                chunk['lookup_hash'] = f"lookup_{file_lookup_hash}"
+            else:
+                chunk['lookup_hash'] = ''
+            
             chunks.append(chunk)
         
         return chunks
@@ -1647,6 +1782,9 @@ class StandaloneIndexer:
         # Generate unique chunk_id and _id
         chunk['chunk_id'] = self._generate_chunk_id(chunk)
         chunk['_id'] = self._generate_chunk_content_id(chunk)
+        
+        # Generate lookup_hash for method chunk
+        chunk['lookup_hash'] = self._generate_lookup_hash_for_method(func, parsed, file_path)
         
         return chunk
     
@@ -1811,6 +1949,9 @@ class StandaloneIndexer:
         chunk['chunk_id'] = self._generate_chunk_id(chunk)
         chunk['_id'] = self._generate_chunk_content_id(chunk)
         
+        # Generate lookup_hash for class chunk
+        chunk['lookup_hash'] = self._generate_lookup_hash_for_class(cls, parsed, file_path)
+        
         return chunk
     
     def _split_large_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str) -> List[Dict[str, Any]]:
@@ -1861,6 +2002,22 @@ class StandaloneIndexer:
             # Generate unique chunk_id and _id
             chunk['chunk_id'] = self._generate_chunk_id(chunk)
             chunk['_id'] = self._generate_chunk_content_id(chunk)
+            
+            # Generate lookup_hash for split chunks
+            if entity_type == 'method' and self.project_id:
+                method_name = entity.get('name', 'unknown')
+                method_fqcn = f"{Path(file_path).stem}.{method_name}"
+                lookup_string = f"{self.project_id}:{method_name}:{method_fqcn}"
+                lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
+                chunk['lookup_hash'] = f"lookup_{lookup_hash}"
+            elif entity_type == 'class' and self.project_id:
+                class_name = entity.get('name', 'unknown')
+                lookup_string = f"{self.project_id}::{class_name}"
+                lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
+                chunk['lookup_hash'] = f"lookup_{lookup_hash}"
+            else:
+                chunk['lookup_hash'] = ''
+            
             chunks.append(chunk)
         
         return chunks
@@ -1904,6 +2061,22 @@ class StandaloneIndexer:
             # Generate unique chunk_id and _id
             chunk['chunk_id'] = self._generate_chunk_id(chunk)
             chunk['_id'] = self._generate_chunk_content_id(chunk)
+            
+            # Generate lookup_hash
+            if entity_type == 'method' and self.project_id:
+                method_name = entity.get('name', 'unknown')
+                method_fqcn = f"{Path(file_path).stem}.{method_name}"
+                lookup_string = f"{self.project_id}:{method_name}:{method_fqcn}"
+                lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
+                chunk['lookup_hash'] = f"lookup_{lookup_hash}"
+            elif entity_type == 'class' and self.project_id:
+                class_name = entity.get('name', 'unknown')
+                lookup_string = f"{self.project_id}::{class_name}"
+                lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
+                chunk['lookup_hash'] = f"lookup_{lookup_hash}"
+            else:
+                chunk['lookup_hash'] = ''
+            
             return [chunk]
         
         # Try to split by logical blocks
@@ -2003,6 +2176,16 @@ class StandaloneIndexer:
             # Generate unique chunk_id and _id
             chunk['chunk_id'] = self._generate_chunk_id(chunk)
             chunk['_id'] = self._generate_chunk_content_id(chunk)
+            
+            # Generate lookup_hash for sliding window chunks
+            if self.project_id:
+                class_name = entity.get('name', 'unknown')
+                lookup_string = f"{self.project_id}::{class_name}"
+                lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
+                chunk['lookup_hash'] = f"lookup_{lookup_hash}"
+            else:
+                chunk['lookup_hash'] = ''
+            
             chunks.append(chunk)
         
         return chunks
@@ -2122,8 +2305,8 @@ class StandaloneOpenSearch:
                     connection_class=RequestsHttpConnection
                 )
                 print(f"✅ Connected to OpenSearch: {self.opensearch_endpoint}")
-        except Exception as e:
-            print(f"⚠️ Failed to connect to OpenSearch: {e}")
+            except Exception as e:
+                print(f"⚠️ Failed to connect to OpenSearch: {e}")
             import traceback
             print(traceback.format_exc())
     
@@ -2217,7 +2400,15 @@ class StandaloneOpenSearch:
                 print(f"✅ Index '{self.index_name}' exists")
                 return True
             
-            mapping = {
+            # Create index with settings (knn enabled, 5 shards) and mappings
+            index_body = {
+                "settings": {
+                    "index": {
+                        "knn": True,  # Enable kNN search
+                        "number_of_shards": 5,  # Set to 5 shards
+                        "number_of_replicas": 1,  # Adjust based on your needs
+                    }
+                },
                 "mappings": {
                     "properties": {
                         "chunk_id": {"type": "keyword"},
@@ -2232,6 +2423,7 @@ class StandaloneOpenSearch:
                         "summary": {"type": "text"},
                         "application_name": {"type": "keyword"},
                         "seal_id": {"type": "keyword"},
+                        "lookup_hash": {"type": "keyword"},  # Lookup hash for method/class lookup
                         "embedding": {
                             "type": "knn_vector",
                             "dimension": embedding_dim,
@@ -2240,8 +2432,8 @@ class StandaloneOpenSearch:
                 }
             }
             
-            self.client.indices.create(index=self.index_name, body=mapping)
-            print(f"✅ Created index '{self.index_name}'")
+            self.client.indices.create(index=self.index_name, body=index_body)
+            print(f"✅ Created index '{self.index_name}' with kNN enabled and 5 shards")
             return True
         except Exception as e:
             print(f"❌ Error ensuring index: {e}")
@@ -2273,6 +2465,7 @@ class StandaloneOpenSearch:
                 'summary': chunk.get('summary', ''),
                 'application_name': self.application_name or '',
                 'seal_id': self.seal_id or '',
+                'lookup_hash': chunk.get('lookup_hash', ''),  # Lookup hash
                 'embedding': chunk['embedding'],
             }
             
@@ -2397,7 +2590,7 @@ class StandaloneOpenSearch:
                         error_count += errors
                         if error_msg:
                             error_messages.append(error_msg)
-                    except Exception as e:
+            except Exception as e:
                         error_count += len(batches[batch_idx])
                         error_messages.append(f"Batch {batch_idx+1}: {str(e)}")
                     
