@@ -4224,7 +4224,9 @@ async def generate_chunks_for_file(
     chunking_strategy: str = "class_metadata",
     max_chunk_size: int = 1000,
     enforce_size: bool = True,
-    chunk_overlap_size: int = 50
+    chunk_overlap_size: int = 50,
+    application_name: Optional[str] = None,
+    seal_id: Optional[str] = None
 ):
     """
     Generate chunks for a single file and save to JSON.
@@ -4236,6 +4238,8 @@ async def generate_chunks_for_file(
         max_chunk_size: Maximum chunk size in characters
         enforce_size: Whether to enforce chunk size limits
         chunk_overlap_size: Overlap size for sliding_window strategy
+        application_name: Application name for lookup_hash generation
+        seal_id: Seal ID for lookup_hash generation
     """
     file_path_obj = Path(file_path)
     if not file_path_obj.exists():
@@ -4245,6 +4249,8 @@ async def generate_chunks_for_file(
     print(f"   Strategy: {chunking_strategy}")
     print(f"   Max chunk size: {max_chunk_size}")
     print(f"   Enforce size: {enforce_size}")
+    if application_name and seal_id:
+        print(f"   Application: {application_name}, Seal ID: {seal_id}")
     
     # Initialize indexer with specified strategy
     indexer = StandaloneIndexer(
@@ -4253,7 +4259,9 @@ async def generate_chunks_for_file(
         chunking_strategy=chunking_strategy,
         max_chunk_size=max_chunk_size,
         enforce_chunk_size=enforce_size,
-        chunk_overlap_size=chunk_overlap_size
+        chunk_overlap_size=chunk_overlap_size,
+        application_name=application_name,
+        seal_id=seal_id
     )
     
     # Parse file
@@ -4398,7 +4406,9 @@ async def main():
             chunking_strategy=args.chunking_strategy,
             max_chunk_size=args.max_chunk_size,
             enforce_size=args.enforce_chunk_size,
-            chunk_overlap_size=args.chunk_overlap_size
+            chunk_overlap_size=args.chunk_overlap_size,
+            application_name=args.application_name,
+            seal_id=args.seal_id
         )
         return
     
