@@ -1,0 +1,41 @@
+name: "ChatAgent"
+description: "Agent using Google ADK for conversational chat"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    conversation_history:
+      - role: "user"
+        content: "Hello, what can you help me with?"
+      - role: "assistant"
+        content: "I can help you with various tasks. What would you like to know?"
+    current_message: "Tell me about Python programming"
+    system_prompt: "You are a helpful programming assistant."
+  
+  steps:
+    - name: "chat_with_llm"
+      type: "action"
+      action: "llm_chat"
+      parameters:
+        messages: "{{conversation_history}}"
+        system_prompt: "{{system_prompt}}"
+    
+    - name: "add_user_message"
+      type: "action"
+      action: "transform"
+      parameters:
+        data: "{{conversation_history}}"
+        transformation: "append"
+      depends_on:
+        - "chat_with_llm"
+    
+    - name: "notify_chat_complete"
+      type: "action"
+      action: "notify"
+      parameters:
+        status: "success"
+        message: "Chat response generated"
+      depends_on:
+        - "add_user_message"
+

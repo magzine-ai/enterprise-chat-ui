@@ -1,0 +1,27 @@
+name: "StreamingAgent"
+description: "Agent using Google ADK for streaming text generation"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    prompt: "Write a short story about a robot learning to paint"
+    system_prompt: "You are a creative writing assistant."
+  
+  steps:
+    - name: "stream_generation"
+      type: "action"
+      action: "llm_stream"
+      parameters:
+        prompt: "{{prompt}}"
+        system_prompt: "{{system_prompt}}"
+    
+    - name: "log_stream_result"
+      type: "action"
+      action: "log"
+      parameters:
+        level: "info"
+        message: "Streamed {{stream_generation.output.chunks|length}} chunks"
+      depends_on:
+        - "stream_generation"
+

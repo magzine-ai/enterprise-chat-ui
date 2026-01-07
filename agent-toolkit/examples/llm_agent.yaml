@@ -1,0 +1,36 @@
+name: "LLMAgent"
+description: "Agent using Google ADK for LLM generation"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    user_query: "Explain how machine learning works"
+    system_instruction: "You are a helpful AI assistant that explains complex topics in simple terms."
+  
+  steps:
+    - name: "generate_response"
+      type: "action"
+      action: "llm_generate"
+      parameters:
+        prompt: "{{user_query}}"
+        system_prompt: "{{system_instruction}}"
+    
+    - name: "log_response"
+      type: "action"
+      action: "log"
+      parameters:
+        level: "info"
+        message: "Generated LLM response: {{generate_response.output.response}}"
+      depends_on:
+        - "generate_response"
+    
+    - name: "notify_completion"
+      type: "action"
+      action: "notify"
+      parameters:
+        status: "success"
+        message: "LLM generation completed"
+      depends_on:
+        - "log_response"
+

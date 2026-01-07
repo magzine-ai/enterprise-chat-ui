@@ -10,10 +10,22 @@ from .workflow_engine import WorkflowEngine
 from .declaration_parser import DeclarationParser
 from .agent_registry import AgentRegistry
 
-__all__ = [
-    "AgentWrapper",
-    "WorkflowEngine",
-    "DeclarationParser",
-    "AgentRegistry",
-]
+# Google ADK imports (optional - may not be available)
+try:
+    from .google_adk_client import GoogleADKClient, GoogleADKConfig
+    __all__ = [
+        "AgentWrapper",
+        "WorkflowEngine",
+        "DeclarationParser",
+        "AgentRegistry",
+        "GoogleADKClient",
+        "GoogleADKConfig",
+    ]
+except ImportError:
+    __all__ = [
+        "AgentWrapper",
+        "WorkflowEngine",
+        "DeclarationParser",
+        "AgentRegistry",
+    ]
 

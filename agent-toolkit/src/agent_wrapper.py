@@ -5,13 +5,14 @@ Main agent wrapper integrating Google ADK with workflow engine.
 import asyncio
 import click
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable, Union
+from typing import Dict, Any, Optional, Callable, Union, List
 from rich.console import Console
 from rich.panel import Panel
 
 from .declaration_parser import DeclarationParser, AgentDeclaration
 from .workflow_engine import WorkflowEngine
 from .agent_registry import AgentRegistry
+from .google_adk_client import GoogleADKClient, GoogleADKConfig
 
 
 class AgentWrapper:
@@ -26,7 +27,7 @@ class AgentWrapper:
         Initialize agent wrapper.
         
         Args:
-            google_adk_config: Configuration for Google ADK
+            google_adk_config: Configuration for Google ADK (dict with api_key, model_name, etc.)
             action_registry: Dictionary of action handlers
         """
         self.parser = DeclarationParser()
@@ -34,6 +35,19 @@ class AgentWrapper:
         self.registry = AgentRegistry()
         self.console = Console()
         self.google_adk_config = google_adk_config or {}
+        
+        # Initialize Google ADK client
+        adk_config = GoogleADKConfig(
+            api_key=self.google_adk_config.get('api_key'),
+            model_name=self.google_adk_config.get('model_name', 'gemini-pro'),
+            temperature=self.google_adk_config.get('temperature', 0.7),
+            max_tokens=self.google_adk_config.get('max_tokens', 2048),
+            use_vertex_ai=self.google_adk_config.get('use_vertex_ai', False),
+            project_id=self.google_adk_config.get('project_id'),
+            location=self.google_adk_config.get('location', 'us-central1'),
+            credentials_path=self.google_adk_config.get('credentials_path')
+        )
+        self.adk_client = GoogleADKClient(config=adk_config)
         
         # Register default actions
         self._register_default_actions()
@@ -54,6 +68,11 @@ class AgentWrapper:
         
         # Transform action
         self.engine.register_action("transform", self._action_transform)
+        
+        # Google ADK actions
+        self.engine.register_action("llm_generate", self._action_llm_generate)
+        self.engine.register_action("llm_chat", self._action_llm_chat)
+        self.engine.register_action("llm_stream", self._action_llm_stream)
     
     def _action_greet(self, message: str = "Hello") -> Dict[str, Any]:
         """Default greet action."""
@@ -96,6 +115,73 @@ class AgentWrapper:
             result = data
         
         return {"original": data, "transformed": result, "transformation": transformation}
+    
+    async def _action_llm_generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        context: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
+        """Generate text using Google ADK."""
+        try:
+            response = await self.adk_client.generate_text(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                context=context,
+                stream=False
+            )
+            self.console.print(f"[cyan]LLM Generated: {response[:100]}...[/cyan]")
+            return {"response": response, "status": "success"}
+        except Exception as e:
+            self.console.print(f"[red]LLM Error: {e}[/red]")
+            return {"response": None, "status": "error", "error": str(e)}
+    
+    async def _action_llm_chat(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Chat with Google ADK."""
+        try:
+            response = await self.adk_client.chat(
+                messages=messages,
+                system_prompt=system_prompt,
+                stream=False
+            )
+            self.console.print(f"[cyan]LLM Chat Response: {response[:100]}...[/cyan]")
+            return {"response": response, "status": "success"}
+        except Exception as e:
+            self.console.print(f"[red]LLM Chat Error: {e}[/red]")
+            return {"response": None, "status": "error", "error": str(e)}
+    
+    async def _action_llm_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        context: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
+        """Stream text generation using Google ADK."""
+        try:
+            stream = await self.adk_client.generate_text(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                context=context,
+                stream=True
+            )
+            
+            # Collect streamed chunks
+            chunks = []
+            async for chunk in stream:
+                chunks.append(chunk)
+                self.console.print(f"[green]{chunk}[/green]", end="")
+            
+            self.console.print()  # New line after streaming
+            full_response = "".join(chunks)
+            
+            return {"response": full_response, "chunks": chunks, "status": "success"}
+        except Exception as e:
+            self.console.print(f"[red]LLM Stream Error: {e}[/red]")
+            return {"response": None, "status": "error", "error": str(e)}
     
     def load_agent(self, file_path: Union[str, Path]) -> AgentDeclaration:
         """
@@ -186,14 +272,46 @@ class AgentWrapper:
 
 # CLI Interface
 @click.command()
-@click.option('--config', '-c', required=True, help='Path to agent declaration file')
+@click.option('--config', '-c', help='Path to agent declaration file')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
 @click.option('--register', '-r', is_flag=True, help='Register agent in registry')
 @click.option('--list', 'list_agents', is_flag=True, help='List all registered agents')
 @click.option('--registry-dir', default='examples', help='Directory for agent registry')
-def main(config: str, verbose: bool, register: bool, list_agents: bool, registry_dir: str):
-    """Agent Toolkit CLI - Execute workflow-based agents."""
-    wrapper = AgentWrapper()
+@click.option('--google-api-key', envvar='GOOGLE_API_KEY', help='Google API key for Gemini')
+@click.option('--model', default='gemini-pro', help='Model name (default: gemini-pro)')
+@click.option('--temperature', type=float, default=0.7, help='Temperature for generation (default: 0.7)')
+@click.option('--use-vertex-ai', is_flag=True, help='Use Vertex AI instead of Gemini API')
+@click.option('--project-id', help='GCP project ID (for Vertex AI)')
+@click.option('--location', default='us-central1', help='GCP location (for Vertex AI)')
+def main(
+    config: Optional[str],
+    verbose: bool,
+    register: bool,
+    list_agents: bool,
+    registry_dir: str,
+    google_api_key: Optional[str],
+    model: str,
+    temperature: float,
+    use_vertex_ai: bool,
+    project_id: Optional[str],
+    location: str
+):
+    """Agent Toolkit CLI - Execute workflow-based agents with Google ADK integration."""
+    # Build Google ADK config
+    google_adk_config = {}
+    if google_api_key:
+        google_adk_config['api_key'] = google_api_key
+    if model:
+        google_adk_config['model_name'] = model
+    if temperature is not None:
+        google_adk_config['temperature'] = temperature
+    if use_vertex_ai:
+        google_adk_config['use_vertex_ai'] = True
+        if project_id:
+            google_adk_config['project_id'] = project_id
+        google_adk_config['location'] = location
+    
+    wrapper = AgentWrapper(google_adk_config=google_adk_config if google_adk_config else None)
     console = Console()
     
     if list_agents:
@@ -201,6 +319,10 @@ def main(config: str, verbose: bool, register: bool, list_agents: bool, registry
         registry_path = Path(registry_dir)
         wrapper.registry.register_from_directory(registry_path)
         wrapper.registry.display_registry()
+        return
+    
+    if not config:
+        console.print("[red]Error: --config is required (or use --list to list agents)[/red]")
         return
     
     # Load and execute agent
