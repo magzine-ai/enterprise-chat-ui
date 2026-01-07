@@ -4299,6 +4299,7 @@ async def generate_chunks_for_file(
             "summary": chunk.get('summary', ''),
             "code_size": len(chunk.get('code', '')),
             "language": chunk.get('language', parsed.get('language', 'unknown')),
+            "lookup_hash": chunk.get('lookup_hash', '')
         }
         
         output_data["chunks"].append(chunk_data)
