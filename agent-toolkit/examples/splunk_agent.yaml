@@ -1,0 +1,80 @@
+name: "SplunkAgent"
+description: "Handles Splunk queries, log analysis, and observability questions"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    user_query: ""
+    splunk_endpoint: "${SPLUNK_ENDPOINT}"
+    splunk_token: "${SPLUNK_TOKEN}"
+  
+  steps:
+    - name: "understand_query"
+      type: "action"
+      action: "llm_generate"
+      parameters:
+        prompt: |
+          Analyze this Splunk-related query and determine:
+          1. What type of query is this? (search, dashboard, alert, etc.)
+          2. What information is needed?
+          3. What Splunk SPL (Search Processing Language) query would be appropriate?
+          
+          Query: "{{user_query}}"
+        system_prompt: "You are a Splunk expert. Help users with Splunk queries and observability questions."
+    
+    - name: "generate_spl_query"
+      type: "action"
+      action: "llm_generate"
+      parameters:
+        prompt: |
+          Based on the analysis, generate a valid Splunk SPL query.
+          
+          Analysis: {{understand_query.output.response}}
+          Original Query: {{user_query}}
+          
+          Generate ONLY the SPL query, no explanations.
+        system_prompt: "You are a Splunk SPL query generator. Generate valid, optimized SPL queries."
+      depends_on:
+        - "understand_query"
+    
+    - name: "human_approval"
+      type: "condition"
+      condition: "{{require_approval}} == true"
+      on_true:
+        - name: "request_approval"
+          type: "action"
+          action: "notify"
+          parameters:
+            status: "pending"
+            message: "SPL Query generated. Awaiting human approval: {{generate_spl_query.output.response}}"
+        - name: "wait_for_approval"
+          type: "wait"
+          wait: "{{approval_timeout}}"
+      on_false:
+        - name: "auto_proceed"
+          type: "action"
+          action: "log"
+          parameters:
+            level: "info"
+            message: "Auto-proceeding with query execution"
+    
+    - name: "execute_query"
+      type: "action"
+      action: "splunk_query"
+      parameters:
+        query: "{{generate_spl_query.output.response}}"
+        endpoint: "{{splunk_endpoint}}"
+        token: "{{splunk_token}}"
+      depends_on:
+        - "generate_spl_query"
+    
+    - name: "format_results"
+      type: "action"
+      action: "transform"
+      parameters:
+        data: "{{execute_query.output}}"
+        transformation: "format_splunk_results"
+      depends_on:
+        - "execute_query"
+

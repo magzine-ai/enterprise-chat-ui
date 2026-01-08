@@ -1,0 +1,62 @@
+name: "APIDiscoveryAgent"
+description: "Uses RAG to answer questions about APIs and endpoints"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    user_query: ""
+    rag_index: "${OPENSEARCH_INDEX}"
+    rag_endpoint: "${OPENSEARCH_ENDPOINT}"
+    max_results: 5
+  
+  steps:
+    - name: "generate_search_query"
+      type: "action"
+      action: "llm_generate"
+      parameters:
+        prompt: |
+          Convert this user question into search terms for API documentation retrieval:
+          
+          Question: "{{user_query}}"
+          
+          Generate search keywords and phrases that would help find relevant API documentation.
+        system_prompt: "You are a search query optimizer. Generate effective search terms for RAG retrieval."
+    
+    - name: "rag_search"
+      type: "action"
+      action: "rag_search"
+      parameters:
+        query: "{{generate_search_query.output.response}}"
+        index: "{{rag_index}}"
+        endpoint: "{{rag_endpoint}}"
+        max_results: "{{max_results}}"
+      depends_on:
+        - "generate_search_query"
+    
+    - name: "generate_answer"
+      type: "action"
+      action: "llm_generate"
+      parameters:
+        prompt: |
+          Answer the user's question using the following API documentation:
+          
+          Question: {{user_query}}
+          
+          Relevant Documentation:
+          {{rag_search.output.results}}
+          
+          Provide a comprehensive answer with code examples if applicable.
+        system_prompt: "You are an API documentation expert. Provide clear, accurate answers with examples."
+      depends_on:
+        - "rag_search"
+    
+    - name: "format_api_response"
+      type: "action"
+      action: "format_api_docs"
+      parameters:
+        answer: "{{generate_answer.output.response}}"
+        sources: "{{rag_search.output.sources}}"
+      depends_on:
+        - "generate_answer"
+

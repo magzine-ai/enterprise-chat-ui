@@ -1,0 +1,55 @@
+name: "ResponseBuilderAgent"
+description: "Builds responses in the specific format expected by the UI"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    agent_response: {}
+    response_type: "standard"
+    ui_format:
+      success: true
+      data: {}
+      metadata: {}
+      timestamp: ""
+      agent_name: ""
+  
+  steps:
+    - name: "extract_response_data"
+      type: "action"
+      action: "transform"
+      parameters:
+        data: "{{agent_response}}"
+        transformation: "extract_data"
+    
+    - name: "build_ui_response"
+      type: "action"
+      action: "format_ui_response"
+      parameters:
+        success: true
+        data: "{{extract_response_data.output}}"
+        metadata:
+          agent: "{{agent_response.agent_name}}"
+          timestamp: "{{current_timestamp}}"
+          response_type: "{{response_type}}"
+        format: "{{ui_format}}"
+      depends_on:
+        - "extract_response_data"
+    
+    - name: "validate_format"
+      type: "action"
+      action: "validate_ui_format"
+      parameters:
+        response: "{{build_ui_response.output}}"
+      depends_on:
+        - "build_ui_response"
+    
+    - name: "return_formatted"
+      type: "action"
+      action: "notify"
+      parameters:
+        status: "success"
+        message: "Response formatted and ready for UI"
+      depends_on:
+        - "validate_format"
+

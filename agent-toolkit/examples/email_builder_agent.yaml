@@ -1,0 +1,77 @@
+name: "EmailBuilderAgent"
+description: "Builds and composes email content"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    recipient: ""
+    subject: ""
+    email_content_request: ""
+    tone: "professional"
+  
+  steps:
+    - name: "generate_email_content"
+      type: "action"
+      action: "llm_generate"
+      parameters:
+        prompt: |
+          Create an email with the following requirements:
+          
+          Recipient: {{recipient}}
+          Subject: {{subject}}
+          Content Request: {{email_content_request}}
+          Tone: {{tone}}
+          
+          Generate a complete, well-formatted email.
+        system_prompt: "You are an expert email composer. Create professional, clear, and effective emails."
+    
+    - name: "human_review"
+      type: "action"
+      action: "notify"
+      parameters:
+        status: "pending"
+        message: "Email draft ready for review. Content: {{generate_email_content.output.response}}"
+    
+    - name: "wait_for_feedback"
+      type: "wait"
+      wait: 30
+      depends_on:
+        - "human_review"
+    
+    - name: "apply_feedback"
+      type: "condition"
+      condition: "{{has_feedback}} == true"
+      on_true:
+        - name: "revise_email"
+          type: "action"
+          action: "llm_generate"
+          parameters:
+            prompt: |
+              Revise the email based on feedback:
+              
+              Original: {{generate_email_content.output.response}}
+              Feedback: {{feedback}}
+              
+              Generate the revised email.
+            system_prompt: "Revise the email based on the provided feedback."
+      on_false:
+        - name: "use_original"
+          type: "action"
+          action: "log"
+          parameters:
+            level: "info"
+            message: "Using original email content"
+      depends_on:
+        - "wait_for_feedback"
+    
+    - name: "finalize_email"
+      type: "action"
+      action: "format_email"
+      parameters:
+        recipient: "{{recipient}}"
+        subject: "{{subject}}"
+        body: "{{apply_feedback.output.response}}"
+      depends_on:
+        - "apply_feedback"
+

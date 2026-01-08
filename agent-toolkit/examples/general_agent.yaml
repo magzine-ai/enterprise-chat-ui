@@ -1,0 +1,27 @@
+name: "GeneralAgent"
+description: "Handles general questions and conversations"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    user_query: ""
+    conversation_history: []
+  
+  steps:
+    - name: "generate_response"
+      type: "action"
+      action: "llm_chat"
+      parameters:
+        messages: "{{conversation_history}}"
+        system_prompt: "You are a helpful AI assistant. Provide clear, accurate, and helpful responses."
+    
+    - name: "log_response"
+      type: "action"
+      action: "log"
+      parameters:
+        level: "info"
+        message: "Generated response for general query"
+      depends_on:
+        - "generate_response"
+

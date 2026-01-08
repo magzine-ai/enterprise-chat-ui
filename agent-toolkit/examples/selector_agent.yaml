@@ -1,0 +1,66 @@
+name: "SelectorAgent"
+description: "Routes user prompts to appropriate specialized agents"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    user_prompt: ""
+    available_agents:
+      - name: "splunk"
+        description: "For Splunk queries, log analysis, and observability questions"
+        keywords: ["splunk", "logs", "observability", "monitoring", "search", "query"]
+      - name: "email_builder"
+        description: "For composing and building email content"
+        keywords: ["email", "send", "compose", "mail", "message"]
+      - name: "api_discovery"
+        description: "For API documentation, endpoints, and integration questions using RAG"
+        keywords: ["api", "endpoint", "documentation", "integration", "rest", "graphql"]
+      - name: "general"
+        description: "For general questions and conversations"
+        keywords: ["general", "help", "question", "chat"]
+  
+  steps:
+    - name: "analyze_prompt"
+      type: "action"
+      action: "llm_generate"
+      parameters:
+        prompt: |
+          Analyze the following user prompt and determine which agent should handle it.
+          
+          User Prompt: "{{user_prompt}}"
+          
+          Available Agents:
+          {{available_agents}}
+          
+          Respond with ONLY the agent name (one of: splunk, email_builder, api_discovery, general).
+          Do not include any explanation or additional text.
+        system_prompt: "You are an intelligent agent router. Analyze prompts and select the most appropriate agent."
+    
+    - name: "extract_agent_name"
+      type: "action"
+      action: "transform"
+      parameters:
+        data: "{{analyze_prompt.output.response}}"
+        transformation: "extract_agent"
+      depends_on:
+        - "analyze_prompt"
+    
+    - name: "log_selection"
+      type: "action"
+      action: "log"
+      parameters:
+        level: "info"
+        message: "Selected agent: {{extract_agent.output}} for prompt: {{user_prompt}}"
+      depends_on:
+        - "extract_agent_name"
+    
+    - name: "return_selection"
+      type: "action"
+      action: "notify"
+      parameters:
+        status: "success"
+        message: "Agent selected: {{extract_agent.output}}"
+      depends_on:
+        - "log_selection"
+

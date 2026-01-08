@@ -1,0 +1,167 @@
+name: "HumanInLoopWorkflow"
+description: "Main workflow with selector agent and human-in-the-loop steps"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    user_prompt: ""
+    require_approval: true
+    require_confirmation: true
+  
+  steps:
+    # Step 1: Select appropriate agent
+    - name: "select_agent"
+      type: "action"
+      action: "selector_agent"
+      parameters:
+        user_prompt: "{{user_prompt}}"
+    
+    # Step 2: Route to selected agent
+    - name: "route_to_agent"
+      type: "condition"
+      condition: "{{parse_agent_selection.output.selected_agent}} == 'splunk'"
+      on_true:
+        - name: "execute_splunk_agent"
+          type: "action"
+          action: "splunk_agent"
+          parameters:
+            user_query: "{{user_prompt}}"
+            require_approval: "{{require_approval}}"
+      on_false:
+        - name: "check_email_builder"
+          type: "condition"
+          condition: "{{parse_agent_selection.output.selected_agent}} == 'email_builder'"
+          on_true:
+            - name: "execute_email_builder"
+              type: "action"
+              action: "email_builder_agent"
+              parameters:
+                email_content_request: "{{user_prompt}}"
+          on_false:
+            - name: "check_api_discovery"
+              type: "condition"
+              condition: "{{parse_agent_selection.output.selected_agent}} == 'api_discovery'"
+              on_true:
+                - name: "execute_api_discovery"
+                  type: "action"
+                  action: "api_discovery_agent"
+                  parameters:
+                    user_query: "{{user_prompt}}"
+              on_false:
+                - name: "execute_general"
+                  type: "action"
+                  action: "general_agent"
+                  parameters:
+                    user_query: "{{user_prompt}}"
+      depends_on:
+        - "parse_agent_selection"
+    
+    # Step 3: Human review step (if required)
+    - name: "human_review"
+      type: "condition"
+      condition: "{{require_approval}} == true"
+      on_true:
+        - name: "request_human_review"
+          type: "action"
+          action: "notify"
+          parameters:
+            status: "pending"
+            message: "Agent response ready for human review. Response: {{route_to_agent.output}}"
+        - name: "wait_for_review"
+          type: "wait"
+          wait: 300  # 5 minutes timeout
+        - name: "check_review_feedback"
+          type: "condition"
+          condition: "{{review_approved}} == true"
+          on_true:
+            - name: "apply_review_feedback"
+              type: "action"
+              action: "llm_generate"
+              parameters:
+                prompt: |
+                  Revise the response based on human feedback:
+                  
+                  Original Response: {{route_to_agent.output}}
+                  Feedback: {{review_feedback}}
+                  
+                  Generate revised response.
+                system_prompt: "Revise the response based on human feedback."
+          on_false:
+            - name: "reject_response"
+              type: "action"
+              action: "notify"
+              parameters:
+                status: "rejected"
+                message: "Response rejected by human reviewer"
+      on_false:
+        - name: "skip_review"
+          type: "action"
+          action: "log"
+          parameters:
+            level: "info"
+            message: "Skipping human review (auto-approve enabled)"
+      depends_on:
+        - "route_to_agent"
+    
+    # Step 4: Build UI-formatted response
+    - name: "build_ui_response"
+      type: "action"
+      action: "response_builder_agent"
+      parameters:
+        agent_response: "{{human_review.output}}"
+        response_type: "{{parse_agent_selection.output.selected_agent}}"
+      depends_on:
+        - "human_review"
+    
+    # Step 5: Final human confirmation (for actions like sending emails)
+    - name: "final_confirmation"
+      type: "condition"
+      condition: "{{parse_agent_selection.output.selected_agent}} == 'email_builder' and {{require_confirmation}} == true"
+      on_true:
+        - name: "request_final_confirmation"
+          type: "action"
+          action: "notify"
+          parameters:
+            status: "pending"
+            message: "Email ready. Awaiting final confirmation to send."
+        - name: "wait_for_confirmation"
+          type: "wait"
+          wait: 60
+        - name: "execute_email_send"
+          type: "condition"
+          condition: "{{confirmed}} == true"
+          on_true:
+            - name: "send_email"
+              type: "action"
+              action: "email_sending_tool"
+              parameters:
+                email_data: "{{build_ui_response.output.data}}"
+                require_confirmation: false
+          on_false:
+            - name: "cancel_email"
+              type: "action"
+              action: "notify"
+              parameters:
+                status: "cancelled"
+                message: "Email sending cancelled"
+      on_false:
+        - name: "skip_confirmation"
+          type: "action"
+          action: "log"
+          parameters:
+            level: "info"
+            message: "No confirmation required for this agent type"
+      depends_on:
+        - "build_ui_response"
+    
+    # Step 6: Return final response
+    - name: "return_response"
+      type: "action"
+      action: "notify"
+      parameters:
+        status: "success"
+        message: "Workflow completed. Response ready: {{build_ui_response.output}}"
+      depends_on:
+        - "final_confirmation"
+

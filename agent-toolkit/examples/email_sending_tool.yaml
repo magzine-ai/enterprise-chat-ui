@@ -1,0 +1,76 @@
+name: "EmailSendingTool"
+description: "Sends emails using configured email service"
+type: "workflow"
+version: "1.0.0"
+
+workflow:
+  variables:
+    email_data: {}
+    require_confirmation: true
+  
+  steps:
+    - name: "validate_email"
+      type: "action"
+      action: "validate_email"
+      parameters:
+        email: "{{email_data}}"
+    
+    - name: "human_confirmation"
+      type: "condition"
+      condition: "{{require_confirmation}} == true"
+      on_true:
+        - name: "request_confirmation"
+          type: "action"
+          action: "notify"
+          parameters:
+            status: "pending"
+            message: "Email ready to send. Awaiting confirmation. To: {{email_data.recipient}}, Subject: {{email_data.subject}}"
+        - name: "wait_for_confirmation"
+          type: "wait"
+          wait: 60
+        - name: "check_confirmation"
+          type: "condition"
+          condition: "{{confirmed}} == true"
+          on_true:
+            - name: "send_email"
+              type: "action"
+              action: "send_email"
+              parameters:
+                recipient: "{{email_data.recipient}}"
+                subject: "{{email_data.subject}}"
+                body: "{{email_data.body}}"
+                smtp_server: "${SMTP_SERVER}"
+                smtp_port: "${SMTP_PORT}"
+                smtp_user: "${SMTP_USER}"
+                smtp_password: "${SMTP_PASSWORD}"
+          on_false:
+            - name: "cancel_send"
+              type: "action"
+              action: "notify"
+              parameters:
+                status: "cancelled"
+                message: "Email sending cancelled by user"
+      on_false:
+        - name: "auto_send"
+          type: "action"
+          action: "send_email"
+          parameters:
+            recipient: "{{email_data.recipient}}"
+            subject: "{{email_data.subject}}"
+            body: "{{email_data.body}}"
+            smtp_server: "${SMTP_SERVER}"
+            smtp_port: "${SMTP_PORT}"
+            smtp_user: "${SMTP_USER}"
+            smtp_password: "${SMTP_PASSWORD}"
+      depends_on:
+        - "validate_email"
+    
+    - name: "confirm_sent"
+      type: "action"
+      action: "log"
+      parameters:
+        level: "success"
+        message: "Email sent successfully to {{email_data.recipient}}"
+      depends_on:
+        - "human_confirmation"
+

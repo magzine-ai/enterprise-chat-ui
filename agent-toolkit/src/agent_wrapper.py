@@ -14,6 +14,13 @@ from .workflow_engine import WorkflowEngine
 from .agent_registry import AgentRegistry
 from .google_adk_client import GoogleADKClient, GoogleADKConfig
 
+# Import custom actions (optional)
+try:
+    from . import custom_actions
+    CUSTOM_ACTIONS_AVAILABLE = True
+except ImportError:
+    CUSTOM_ACTIONS_AVAILABLE = False
+
 
 class AgentWrapper:
     """Main wrapper for agent execution with Google ADK integration."""
@@ -51,6 +58,10 @@ class AgentWrapper:
         
         # Register default actions
         self._register_default_actions()
+        
+        # Register custom actions if available
+        if CUSTOM_ACTIONS_AVAILABLE:
+            self._register_custom_actions()
     
     def _register_default_actions(self):
         """Register default action handlers."""
@@ -182,6 +193,38 @@ class AgentWrapper:
         except Exception as e:
             self.console.print(f"[red]LLM Stream Error: {e}[/red]")
             return {"response": None, "status": "error", "error": str(e)}
+    
+    def _register_custom_actions(self):
+        """Register custom action handlers."""
+        if not CUSTOM_ACTIONS_AVAILABLE:
+            return
+        
+        # Selector agent
+        self.engine.register_action("selector_agent", custom_actions.selector_agent)
+        
+        # Splunk agent
+        self.engine.register_action("splunk_agent", custom_actions.splunk_query)
+        self.engine.register_action("splunk_query", custom_actions.splunk_query)
+        
+        # Email actions
+        self.engine.register_action("email_builder_agent", custom_actions.format_email)
+        self.engine.register_action("format_email", custom_actions.format_email)
+        self.engine.register_action("validate_email", custom_actions.validate_email)
+        self.engine.register_action("send_email", custom_actions.send_email)
+        self.engine.register_action("email_sending_tool", custom_actions.send_email)
+        
+        # API Discovery (RAG)
+        self.engine.register_action("api_discovery_agent", custom_actions.rag_search)
+        self.engine.register_action("rag_search", custom_actions.rag_search)
+        self.engine.register_action("format_api_docs", custom_actions.format_api_docs)
+        
+        # General agent (uses LLM, already registered)
+        
+        # Response builder
+        self.engine.register_action("response_builder_agent", custom_actions.format_ui_response)
+        self.engine.register_action("format_ui_response", custom_actions.format_ui_response)
+        self.engine.register_action("validate_ui_format", custom_actions.validate_ui_format)
+        self.engine.register_action("extract_data", custom_actions.extract_data)
     
     def load_agent(self, file_path: Union[str, Path]) -> AgentDeclaration:
         """
