@@ -411,7 +411,7 @@ class StandaloneParser:
                         'calls': calls
                     })
             else:
-                for child in node.children:
+            for child in node.children:
                     traverse(child, parent_class)
         
         traverse(root)
@@ -1654,12 +1654,12 @@ class StandaloneIndexer:
             # Sequential processing with progress bar
             file_iter = tqdm(code_files, desc="Processing files") if TQDM_AVAILABLE else code_files
             for file_path in file_iter:
-                parsed = self.parser.parse_file(file_path)
-                if not parsed:
-                    continue
-                
-                file_chunks = self._generate_chunks_for_file(parsed, file_path)
-                all_chunks.extend(file_chunks)
+            parsed = self.parser.parse_file(file_path)
+            if not parsed:
+                continue
+            
+            file_chunks = self._generate_chunks_for_file(parsed, file_path)
+            all_chunks.extend(file_chunks)
                 processed_files.add(file_path)
                 
                 # Save checkpoint periodically
@@ -1689,8 +1689,8 @@ class StandaloneIndexer:
             # Add embeddings to chunks with progress bar
             embed_iter = tqdm(zip(all_chunks, embeddings), total=len(all_chunks), desc="Adding embeddings") if TQDM_AVAILABLE else zip(all_chunks, embeddings)
             for chunk, embedding in embed_iter:
-                if embedding:
-                    chunk['embedding'] = embedding
+            if embedding:
+                chunk['embedding'] = embedding
         
         # Generate statistics with pandas if available
         if PANDAS_AVAILABLE and all_chunks:
@@ -1737,7 +1737,7 @@ class StandaloneIndexer:
             code = func.get('code', '')
             if self.enforce_chunk_size and len(code) > self.max_chunk_size:
                 # Split large methods
-                method_chunks = self._split_large_code(code, func, file_path, 'method')
+                method_chunks = self._split_large_code(code, func, file_path, 'method', parsed)
                 chunks.extend(method_chunks)
             else:
                 chunk = self._create_method_chunk(func, parsed, file_path)
@@ -1752,7 +1752,7 @@ class StandaloneIndexer:
         for func in parsed.get('functions', []):
             code = func.get('code', '')
             if self.enforce_chunk_size and len(code) > self.max_chunk_size:
-                method_chunks = self._split_large_code(code, func, file_path, 'method')
+                method_chunks = self._split_large_code(code, func, file_path, 'method', parsed)
                 chunks.extend(method_chunks)
             else:
                 chunk = self._create_method_chunk(func, parsed, file_path)
@@ -1773,7 +1773,7 @@ class StandaloneIndexer:
         for func in parsed.get('functions', []):
             code = func.get('code', '')
             if self.enforce_chunk_size and len(code) > self.max_chunk_size:
-                method_chunks = self._recursive_split_code(code, func, file_path, 'method')
+                method_chunks = self._recursive_split_code(code, func, file_path, 'method', parsed)
                 chunks.extend(method_chunks)
             else:
                 chunk = self._create_method_chunk(func, parsed, file_path)
@@ -1783,7 +1783,7 @@ class StandaloneIndexer:
         for cls in parsed.get('classes', []):
             code = cls.get('code', '')
             if self.enforce_chunk_size and len(code) > self.max_chunk_size:
-                class_chunks = self._recursive_split_code(code, cls, file_path, 'class')
+                class_chunks = self._recursive_split_code(code, cls, file_path, 'class', parsed)
                 chunks.extend(class_chunks)
             else:
                 chunk = self._create_class_metadata_chunk(cls, parsed, file_path)
@@ -1799,7 +1799,7 @@ class StandaloneIndexer:
         for func in parsed.get('functions', []):
             code = func.get('code', '')
             if self.enforce_chunk_size and len(code) > self.max_chunk_size:
-                method_chunks = self._split_large_code(code, func, file_path, 'method')
+                method_chunks = self._split_large_code(code, func, file_path, 'method', parsed)
                 chunks.extend(method_chunks)
             else:
                 chunk = self._create_method_chunk(func, parsed, file_path)
@@ -1825,7 +1825,7 @@ class StandaloneIndexer:
         for func in parsed.get('functions', []):
             code = func.get('code', '')
             if self.enforce_chunk_size and len(code) > self.max_chunk_size:
-                method_chunks = self._split_large_code(code, func, file_path, 'method')
+                method_chunks = self._split_large_code(code, func, file_path, 'method', parsed)
                 chunks.extend(method_chunks)
             else:
                 chunk = self._create_method_chunk(func, parsed, file_path)
@@ -2074,7 +2074,7 @@ class StandaloneIndexer:
         
         return chunk
     
-    def _split_large_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str) -> List[Dict[str, Any]]:
+    def _split_large_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str, parsed: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Split large code into smaller chunks."""
         chunks = []
         lines = code.split('\n')
@@ -2125,16 +2125,45 @@ class StandaloneIndexer:
             
             # Generate lookup_hash for split chunks
             if entity_type == 'method' and self.project_id:
-                method_name = entity.get('name', 'unknown')
-                method_fqcn = f"{Path(file_path).stem}.{method_name}"
-                lookup_string = f"{self.project_id}:{method_name}:{method_fqcn}"
-                lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
-                chunk['lookup_hash'] = f"lookup_{lookup_hash}"
+                # Use full method signature instead of just method name
+                # Always use the full method code from entity, not the split code portion
+                full_method_code = entity.get('code', '')
+                if not full_method_code:
+                    # If entity doesn't have code, try to use the original code parameter
+                    # But this should rarely happen
+                    full_method_code = code
+                
+                # Ensure parsed has the full method code for signature extraction
+                if parsed:
+                    # Create a copy of parsed with full method code in file_content for better extraction
+                    enhanced_parsed = parsed.copy()
+                    if full_method_code and 'file_content' not in enhanced_parsed:
+                        enhanced_parsed['file_content'] = full_method_code
+                    # Also ensure entity has the full code
+                    enhanced_entity = entity.copy()
+                    enhanced_entity['code'] = full_method_code
+                    chunk['lookup_hash'] = self._generate_lookup_hash_for_method(enhanced_entity, enhanced_parsed, file_path)
+                else:
+                    # Fallback: try to extract signature from entity code if available
+                    # Create a temporary parsed dict with language info and full method code
+                    temp_parsed = {'language': language, 'file_content': full_method_code}
+                    enhanced_entity = entity.copy()
+                    enhanced_entity['code'] = full_method_code
+                    chunk['lookup_hash'] = self._generate_lookup_hash_for_method(enhanced_entity, temp_parsed, file_path)
             elif entity_type == 'class' and self.project_id:
-                class_name = entity.get('name', 'unknown')
-                lookup_string = f"{self.project_id}::{class_name}"
-                lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
-                chunk['lookup_hash'] = f"lookup_{lookup_hash}"
+                # Use full class lookup hash
+                if parsed:
+                    chunk['lookup_hash'] = self._generate_lookup_hash_for_class(entity, parsed, file_path)
+                else:
+                    # Fallback: use class name only
+                    class_name = entity.get('name', 'unknown')
+                    package = ''
+                    if file_path.endswith('.java'):
+                        # Try to infer package from file path
+                        package = self._extract_package_name({'imports': []}, file_path)
+                    lookup_string = f"{self.project_id}:{package}:{class_name}"
+                    lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
+                    chunk['lookup_hash'] = f"lookup_{lookup_hash}"
             else:
                 chunk['lookup_hash'] = ''
             
@@ -2142,7 +2171,7 @@ class StandaloneIndexer:
         
         return chunks
     
-    def _recursive_split_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str) -> List[Dict[str, Any]]:
+    def _recursive_split_code(self, code: str, entity: Dict[str, Any], file_path: str, entity_type: str, parsed: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Recursively split code by logical blocks."""
         # Get relative path and filetype
         relative_path = self._get_relative_path(file_path)
@@ -2184,16 +2213,45 @@ class StandaloneIndexer:
             
             # Generate lookup_hash
             if entity_type == 'method' and self.project_id:
-                method_name = entity.get('name', 'unknown')
-                method_fqcn = f"{Path(file_path).stem}.{method_name}"
-                lookup_string = f"{self.project_id}:{method_name}:{method_fqcn}"
-                lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
-                chunk['lookup_hash'] = f"lookup_{lookup_hash}"
+                # Use full method signature instead of just method name
+                # Always use the full method code from entity, not the split code portion
+                full_method_code = entity.get('code', '')
+                if not full_method_code:
+                    # If entity doesn't have code, try to use the original code parameter
+                    # But this should rarely happen
+                    full_method_code = code
+                
+                # Ensure parsed has the full method code for signature extraction
+                if parsed:
+                    # Create a copy of parsed with full method code in file_content for better extraction
+                    enhanced_parsed = parsed.copy()
+                    if full_method_code and 'file_content' not in enhanced_parsed:
+                        enhanced_parsed['file_content'] = full_method_code
+                    # Also ensure entity has the full code
+                    enhanced_entity = entity.copy()
+                    enhanced_entity['code'] = full_method_code
+                    chunk['lookup_hash'] = self._generate_lookup_hash_for_method(enhanced_entity, enhanced_parsed, file_path)
+                else:
+                    # Fallback: try to extract signature from entity code if available
+                    # Create a temporary parsed dict with language info and full method code
+                    temp_parsed = {'language': language, 'file_content': full_method_code}
+                    enhanced_entity = entity.copy()
+                    enhanced_entity['code'] = full_method_code
+                    chunk['lookup_hash'] = self._generate_lookup_hash_for_method(enhanced_entity, temp_parsed, file_path)
             elif entity_type == 'class' and self.project_id:
-                class_name = entity.get('name', 'unknown')
-                lookup_string = f"{self.project_id}::{class_name}"
-                lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
-                chunk['lookup_hash'] = f"lookup_{lookup_hash}"
+                # Use full class lookup hash
+                if parsed:
+                    chunk['lookup_hash'] = self._generate_lookup_hash_for_class(entity, parsed, file_path)
+                else:
+                    # Fallback: use class name only
+                    class_name = entity.get('name', 'unknown')
+                    package = ''
+                    if file_path.endswith('.java'):
+                        # Try to infer package from file path
+                        package = self._extract_package_name({'imports': []}, file_path)
+                    lookup_string = f"{self.project_id}:{package}:{class_name}"
+                    lookup_hash = hashlib.sha256(lookup_string.encode()).hexdigest()[:16]
+                    chunk['lookup_hash'] = f"lookup_{lookup_hash}"
             else:
                 chunk['lookup_hash'] = ''
             
@@ -2206,13 +2264,13 @@ class StandaloneIndexer:
             current_start = entity.get('start_line', 1)
             for block in blocks:
                 block_code = '\n'.join(block)
-                sub_chunks = self._recursive_split_code(block_code, entity, file_path, entity_type)
+                sub_chunks = self._recursive_split_code(block_code, entity, file_path, entity_type, parsed)
                 chunks.extend(sub_chunks)
                 current_start += len(block)
             return chunks
         
         # Fallback: split by lines
-        return self._split_large_code(code, entity, file_path, entity_type)
+        return self._split_large_code(code, entity, file_path, entity_type, parsed)
     
     def _extract_logical_blocks(self, code: str) -> List[List[str]]:
         """Extract logical blocks (if/else, try/catch, loops) from code."""
@@ -2425,8 +2483,8 @@ class StandaloneOpenSearch:
                     connection_class=RequestsHttpConnection
                 )
                 print(f"✅ Connected to OpenSearch: {self.opensearch_endpoint}")
-        except Exception as e:
-            print(f"⚠️ Failed to connect to OpenSearch: {e}")
+            except Exception as e:
+                print(f"⚠️ Failed to connect to OpenSearch: {e}")
             import traceback
             print(traceback.format_exc())
     
@@ -2710,7 +2768,7 @@ class StandaloneOpenSearch:
                         error_count += errors
                         if error_msg:
                             error_messages.append(error_msg)
-                    except Exception as e:
+            except Exception as e:
                         error_count += len(batches[batch_idx])
                         error_messages.append(f"Batch {batch_idx+1}: {str(e)}")
                     
