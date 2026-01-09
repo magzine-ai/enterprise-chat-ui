@@ -31,6 +31,7 @@ import {
   completeStreamingMessage
 } from './store/slices/messagesSlice';
 import { updateJob } from './store/slices/jobsSlice';
+import { setActivity, clearActivity } from './store/slices/activitySlice';
 // Use API service (switches between real and mock based on config)
 import { apiService } from './services/apiService';
 import { wsService } from './services/wsService';
@@ -179,6 +180,9 @@ const AppContent: React.FC = () => {
         
         // Add the assistant message
         dispatch(addMessage(data));
+        
+        // Clear activity indicator when message arrives
+        dispatch(clearActivity(conversationId));
         
         // Clear waiting state to unblock input IMMEDIATELY
         console.log(`🔓 Clearing waiting state for conversation ${conversationId}`);
@@ -330,6 +334,9 @@ const AppContent: React.FC = () => {
       // Complete streaming message with blocks
       dispatch(completeStreamingMessage({ conversationId, messageId, blocks }));
       
+      // Clear activity indicator when streaming completes
+      dispatch(clearActivity(conversationId));
+      
       // Clear waiting state
       dispatch(setWaitingForResponse({ conversationId, waiting: false }));
       
@@ -363,6 +370,7 @@ const AppContent: React.FC = () => {
       clearInterval(connectionMonitor);
       unsubscribeMessage();
       unsubscribeJob();
+      unsubscribeActivity();
       unsubscribeStreamStart();
       unsubscribeStreamToken();
       unsubscribeStreamChunk();

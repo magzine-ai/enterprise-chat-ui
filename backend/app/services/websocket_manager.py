@@ -265,6 +265,49 @@ class WebSocketManager:
             }
         }
         await self.broadcast(message)
+    
+    async def send_activity_status(
+        self,
+        conversation_id: int,
+        activity: str,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        """
+        Broadcast activity status update.
+        
+        Sends real-time activity updates to show what's happening during
+        conversation processing (agent selection, RAG calls, response building, etc.).
+        
+        Args:
+            conversation_id: ID of the conversation
+            activity: Activity description (e.g., "Agent: ask", "RAG: Searching...")
+            details: Optional additional details (agent name, step name, etc.)
+        
+        Message Format:
+            {
+                "type": "conversation.activity",
+                "data": {
+                    "conversation_id": int,
+                    "activity": str,
+                    "details": Dict (optional)
+                }
+            }
+        
+        Examples:
+            - Agent selection: "Agent: ask", details={"agent": "ask"}
+            - RAG search: "RAG: Searching OpenSearch...", details={"step": "opensearch_retrieval"}
+            - Query generation: "Generating Splunk query...", details={"step": "query_generation"}
+            - Response building: "Building response...", details={"step": "llm_generation"}
+        """
+        message = {
+            "type": "conversation.activity",
+            "data": {
+                "conversation_id": conversation_id,
+                "activity": activity,
+                "details": details or {}
+            }
+        }
+        await self.broadcast(message)
 
 
 websocket_manager = WebSocketManager()

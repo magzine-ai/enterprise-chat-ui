@@ -17,6 +17,7 @@ import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { addMessage, removeMessage, setWaitingForResponse } from '@/store/slices/messagesSlice';
 import { setJob } from '@/store/slices/jobsSlice';
 import { apiService } from '@/services/apiService';
+import ActivityIndicator from './ActivityIndicator';
 import type { Message } from '@/types';
 
 const MessageInput: React.FC = () => {
@@ -260,6 +261,7 @@ const MessageInput: React.FC = () => {
 
   return (
     <div className="message-input-container">
+      <ActivityIndicator conversationId={conversationId} />
       <div className="message-input-wrapper">
         <form onSubmit={handleSubmit} className="message-input-form">
           <textarea

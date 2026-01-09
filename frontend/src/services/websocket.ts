@@ -82,6 +82,7 @@ export class WebSocketService {
    * - 'message.stream.token': Token received during streaming
    * - 'message.stream.chunk': Chunk received during streaming
    * - 'message.stream.end': Streaming response completed
+   * - 'conversation.activity': Activity status update (agent, RAG, response building)
    * 
    * @param event Event type to listen for
    * @param callback Callback function to invoke when event is received

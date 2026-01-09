@@ -16,12 +16,14 @@ import { configureStore } from '@reduxjs/toolkit';
 import messagesReducer from './slices/messagesSlice';
 import jobsReducer from './slices/jobsSlice';
 import conversationsReducer from './slices/conversationsSlice';
+import activityReducer from './slices/activitySlice';
 
 export const store = configureStore({
   reducer: {
     messages: messagesReducer,
     jobs: jobsReducer,
     conversations: conversationsReducer,
+    activity: activityReducer,
   },
 });
 

@@ -81,6 +81,17 @@ async def classify_intent(state: ConversationState) -> ConversationState:
         - Ambiguous messages: uses keyword matching with fallback to general_chat
         - Multiple intents: prioritizes splunk_query > chart_request > code_request > general_chat
     """
+    from app.services.websocket_manager import websocket_manager
+    
+    conversation_id = state.get("conversation_id", 0)
+    
+    # Broadcast activity: Classifying intent
+    await websocket_manager.send_activity_status(
+        conversation_id=conversation_id,
+        activity="Classifying intent...",
+        details={"step": "intent_classification"}
+    )
+    
     user_message = state.get("user_message", "").lower().strip()
     intent = "general_chat"
     needs_splunk_query = False
@@ -149,7 +160,18 @@ async def generate_splunk_query(state: ConversationState) -> ConversationState:
         - Ambiguous request: generates a generic query with explanation
         - Invalid request: sets error in state and returns
     """
+    from app.services.websocket_manager import websocket_manager
+    
+    conversation_id = state.get("conversation_id", 0)
     user_message = state.get("user_message", "")
+    
+    # Broadcast activity: RAG search
+    if opensearch_service.is_available():
+        await websocket_manager.send_activity_status(
+            conversation_id=conversation_id,
+            activity="RAG: Searching OpenSearch...",
+            details={"step": "opensearch_retrieval"}
+        )
     
     # Retrieve relevant context from OpenSearch
     context = ""
@@ -164,6 +186,13 @@ async def generate_splunk_query(state: ConversationState) -> ConversationState:
         except Exception as e:
             print(f"⚠️ Error retrieving context from OpenSearch: {e}")
             context = ""
+    
+    # Broadcast activity: Generating query
+    await websocket_manager.send_activity_status(
+        conversation_id=conversation_id,
+        activity="Generating Splunk query...",
+        details={"step": "query_generation"}
+    )
     
     # If LLM is available, use it to generate query with context
     if llm_service.is_available():
@@ -274,11 +303,21 @@ async def execute_splunk_query(state: ConversationState) -> ConversationState:
         - Query timeout: handles gracefully
         - No results: returns appropriate message
     """
+    from app.services.websocket_manager import websocket_manager
+    
+    conversation_id = state.get("conversation_id", 0)
     query = state.get("splunk_query", "")
     
     if not query:
         state["error"] = "No Splunk query provided"
         return state
+    
+    # Broadcast activity: Executing query
+    await websocket_manager.send_activity_status(
+        conversation_id=conversation_id,
+        activity="Executing Splunk query...",
+        details={"step": "query_execution"}
+    )
     
     # Mock query execution - in production, this would call Splunk API
     # For now, create a query block that can be executed by the frontend
@@ -321,9 +360,18 @@ async def generate_llm_response(state: ConversationState) -> ConversationState:
         - Empty response: handles gracefully
         - Token limits: truncates history if needed
     """
+    from app.services.websocket_manager import websocket_manager
+    
     user_message = state.get("user_message", "")
     conversation_history = state.get("messages", [])
     conversation_id = state.get("conversation_id", 0)
+    
+    # Broadcast activity: Building response
+    await websocket_manager.send_activity_status(
+        conversation_id=conversation_id,
+        activity="Building response...",
+        details={"step": "llm_generation"}
+    )
     
     # Check if LLM is available
     if not llm_service.is_available():
@@ -339,6 +387,13 @@ async def generate_llm_response(state: ConversationState) -> ConversationState:
             user_message,
             conversation_history,
             conversation_id
+        )
+        
+        # Broadcast activity: Extracting blocks
+        await websocket_manager.send_activity_status(
+            conversation_id=conversation_id,
+            activity="Extracting blocks...",
+            details={"step": "block_extraction"}
         )
         
         # Extract blocks from response
@@ -372,8 +427,17 @@ async def detect_exhaustive_search_needed(state: ConversationState) -> Conversat
     from app.services.advanced_rag_service import advanced_rag_service
     from app.core.database import engine
     from sqlmodel import Session
+    from app.services.websocket_manager import websocket_manager
     
+    conversation_id = state.get("conversation_id", 0)
     user_message = state.get("user_message", "")
+    
+    # Broadcast activity: Detecting search strategy
+    await websocket_manager.send_activity_status(
+        conversation_id=conversation_id,
+        activity="Detecting search strategy...",
+        details={"step": "exhaustive_search_detection"}
+    )
     
     try:
         with Session(engine) as session:
@@ -409,11 +473,19 @@ async def handle_java_code_question(state: ConversationState) -> ConversationSta
     from app.services.java_llm_service import java_llm_service
     from app.core.database import get_session
     from sqlmodel import Session
+    from app.services.websocket_manager import websocket_manager
     
     user_message = state.get("user_message", "")
     conversation_id = state.get("conversation_id", 0)
     thinking_mode = state.get("thinking_mode", "thinking")
     agent = state.get("agent", "ask")
+    
+    # Broadcast activity: Handling code question
+    await websocket_manager.send_activity_status(
+        conversation_id=conversation_id,
+        activity="RAG: Searching code repository...",
+        details={"step": "code_rag_search"}
+    )
     
     # Determine exhaustive search based on thinking mode
     # Deep thinking always uses exhaustive, thinking mode uses intelligent detection
@@ -762,6 +834,15 @@ async def process_conversation(
         - Graph execution failure: returns error state
         - Invalid state: handles gracefully
     """
+    from app.services.websocket_manager import websocket_manager
+    
+    # Broadcast activity: Agent selection
+    await websocket_manager.send_activity_status(
+        conversation_id=conversation_id,
+        activity=f"Agent: {agent}",
+        details={"agent": agent, "thinking_mode": thinking_mode}
+    )
+    
     # Detect mode change requests in message
     message_lower = user_message.lower().strip()
     detected_mode = thinking_mode

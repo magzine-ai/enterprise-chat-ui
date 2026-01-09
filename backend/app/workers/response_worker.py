@@ -49,6 +49,13 @@ async def generate_assistant_response_async(job_id: str):
                 if not user_message_content or not conversation_id:
                     raise ValueError("Missing user_message or conversation_id in job params")
                 
+                # Broadcast activity: Processing request
+                await websocket_manager.send_activity_status(
+                    conversation_id=conversation_id,
+                    activity="Processing request...",
+                    details={"job_id": job_id}
+                )
+                
                 # Get conversation history for context
                 statement = select(Message).where(
                     Message.conversation_id == conversation_id
