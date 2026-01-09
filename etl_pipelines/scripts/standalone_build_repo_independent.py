@@ -1654,12 +1654,12 @@ class StandaloneIndexer:
             # Sequential processing with progress bar
             file_iter = tqdm(code_files, desc="Processing files") if TQDM_AVAILABLE else code_files
             for file_path in file_iter:
-            parsed = self.parser.parse_file(file_path)
-            if not parsed:
-                continue
-            
-            file_chunks = self._generate_chunks_for_file(parsed, file_path)
-            all_chunks.extend(file_chunks)
+                parsed = self.parser.parse_file(file_path)
+                if not parsed:
+                    continue
+                
+                file_chunks = self._generate_chunks_for_file(parsed, file_path)
+                all_chunks.extend(file_chunks)
                 processed_files.add(file_path)
                 
                 # Save checkpoint periodically
@@ -1689,8 +1689,8 @@ class StandaloneIndexer:
             # Add embeddings to chunks with progress bar
             embed_iter = tqdm(zip(all_chunks, embeddings), total=len(all_chunks), desc="Adding embeddings") if TQDM_AVAILABLE else zip(all_chunks, embeddings)
             for chunk, embedding in embed_iter:
-            if embedding:
-                chunk['embedding'] = embedding
+                if embedding:
+                    chunk['embedding'] = embedding
         
         # Generate statistics with pandas if available
         if PANDAS_AVAILABLE and all_chunks:
@@ -2768,7 +2768,7 @@ class StandaloneOpenSearch:
                         error_count += errors
                         if error_msg:
                             error_messages.append(error_msg)
-            except Exception as e:
+                    except Exception as e:
                         error_count += len(batches[batch_idx])
                         error_messages.append(f"Batch {batch_idx+1}: {str(e)}")
                     
