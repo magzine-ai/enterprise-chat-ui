@@ -772,13 +772,19 @@ class StandaloneParser:
         # Extract method calls (simplified)
         calls = self._extract_method_calls(method_code, 'java')
         
+        # Extract modifiers for signature generation
+        modifiers = method.modifiers if hasattr(method, 'modifiers') and method.modifiers else []
+        return_type = str(method.return_type) if hasattr(method, 'return_type') and method.return_type else None
+        
         return {
             'name': method_name,
             'class_name': class_name,
             'start_line': start_line,
             'end_line': end_line,
             'code': method_code,
-            'calls': calls
+            'calls': calls,
+            'modifiers': modifiers,  # Store modifiers for signature extraction
+            'return_type': return_type  # Store return type for signature extraction
         }
     
     def _get_field_code_from_content(self, field_decl: javalang.tree.FieldDeclaration, declarator: javalang.tree.VariableDeclarator, content: str) -> str:
@@ -1254,45 +1260,133 @@ class StandaloneIndexer:
         return ''
     
     def _extract_method_signature(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> str:
-        """Extract method signature (return type + method name + parameters)."""
+        """
+        Extract full method signature including modifiers, return type, method name, and parameters.
+        Example: "public static int getNumber(String numString)"
+        """
         method_code = func.get('code', '')
         method_name = func.get('name', '')
         
+        # First, try to extract from javalang if available (most reliable)
+        if parsed.get('language') == 'java' and 'javalang_tree' in parsed:
+            try:
+                tree = parsed.get('javalang_tree')
+                if tree and tree.types:
+                    for type_decl in tree.types:
+                        if hasattr(type_decl, 'methods'):
+                            for method in type_decl.methods:
+                                if method.name == method_name:
+                                    # Build signature from javalang method
+                                    modifiers = ' '.join(method.modifiers) if hasattr(method, 'modifiers') and method.modifiers else ''
+                                    return_type = str(method.return_type) if hasattr(method, 'return_type') and method.return_type else 'void'
+                                    
+                                    # Build parameter string
+                                    params = []
+                                    if hasattr(method, 'parameters') and method.parameters:
+                                        for p in method.parameters:
+                                            param_type = str(p.type)
+                                            param_name = p.name if hasattr(p, 'name') else ''
+                                            if param_name:
+                                                params.append(f"{param_type} {param_name}")
+                                            else:
+                                                params.append(param_type)
+                                    params_str = ', '.join(params)
+                                    
+                                    if modifiers:
+                                        return f"{modifiers} {return_type} {method_name}({params_str})"
+                                    else:
+                                        return f"{return_type} {method_name}({params_str})"
+            except Exception:
+                pass
+        
+        # Fallback: extract from method code using regex/parsing
         if not method_code:
             return method_name
         
-        # Try to extract signature from method code
-        # Pattern: modifiers return_type method_name(parameters)
-        # Look for method declaration line
+        # Try to extract full signature from method code
+        # Pattern: [modifiers] return_type method_name(parameters)
+        # Method declaration may span multiple lines, so we need to find the opening parenthesis
         lines = method_code.split('\n')
-        if lines:
-            first_line = lines[0].strip()
-            # Find opening parenthesis
-            paren_pos = first_line.find('(')
+        
+        # Find the line with opening parenthesis and collect preceding lines
+        method_decl_lines = []
+        paren_line_idx = -1
+        for i, line in enumerate(lines):
+            if '(' in line:
+                paren_line_idx = i
+                # Collect all lines up to and including this one
+                method_decl_lines = [l.strip() for l in lines[:i+1]]
+                break
+        
+        if method_decl_lines and paren_line_idx >= 0:
+            # Join declaration lines
+            method_decl_text = ' '.join(method_decl_lines)
+            
+            # Find opening parenthesis position
+            paren_pos = method_decl_text.find('(')
             if paren_pos > 0:
                 # Extract everything before the opening parenthesis
-                signature_part = first_line[:paren_pos].strip()
-                # Find method name (last word before parenthesis)
+                signature_part = method_decl_text[:paren_pos].strip()
+                
+                # Split into parts
                 parts = signature_part.split()
-                if parts:
-                    # Method name is typically the last identifier before (
-                    method_name_part = parts[-1] if parts else method_name
-                    # Try to find return type (second to last if present)
-                    if len(parts) > 1:
-                        return_type = parts[-2] if len(parts) > 1 else 'void'
-                    else:
-                        return_type = 'void'
+                if not parts:
+                    return method_name
+                
+                # Method name is the last identifier before (
+                method_name_part = parts[-1] if parts else method_name
+                
+                # Extract modifiers (public, private, protected, static, final, abstract, etc.)
+                modifiers = []
+                java_modifiers = {'public', 'private', 'protected', 'static', 'final', 'abstract', 
+                               'synchronized', 'native', 'strictfp', 'transient', 'volatile'}
+                
+                for part in parts[:-1]:  # All parts except the last (method name)
+                    if part in java_modifiers:
+                        modifiers.append(part)
+                
+                # Return type is everything between modifiers and method name
+                # Could be simple like "int" or complex like "List<String>" or "Map<String, Integer>"
+                return_type_parts = []
+                for i, part in enumerate(parts[:-1]):  # Exclude method name
+                    if part not in java_modifiers:
+                        return_type_parts.append(part)
+                
+                return_type = ' '.join(return_type_parts) if return_type_parts else 'void'
+                
+                # Extract parameters - find content between first ( and matching )
+                full_method_text = ' '.join(lines)
+                paren_start = full_method_text.find('(')
+                if paren_start != -1:
+                    # Find matching closing parenthesis
+                    paren_count = 0
+                    paren_end = -1
+                    for i in range(paren_start, len(full_method_text)):
+                        if full_method_text[i] == '(':
+                            paren_count += 1
+                        elif full_method_text[i] == ')':
+                            paren_count -= 1
+                            if paren_count == 0:
+                                paren_end = i
+                                break
                     
-                    # Extract parameters
-                    paren_end = method_code.find(')', paren_pos)
-                    if paren_end > paren_pos:
-                        params = method_code[paren_pos + 1:paren_end].strip()
+                    if paren_end > paren_start:
+                        params = full_method_text[paren_start + 1:paren_end].strip()
                     else:
                         params = ''
-                    
-                    return f"{return_type} {method_name_part}({params})"
+                else:
+                    params = ''
+                
+                # Build full signature: modifiers return_type method_name(parameters)
+                modifiers_str = ' '.join(modifiers) if modifiers else ''
+                if modifiers_str:
+                    signature = f"{modifiers_str} {return_type} {method_name_part}({params})"
+                else:
+                    signature = f"{return_type} {method_name_part}({params})"
+                
+                return signature.strip()
         
-        # Fallback: just method name
+        # Final fallback: just method name
         return method_name
     
     def _generate_lookup_hash_for_method(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> str:
