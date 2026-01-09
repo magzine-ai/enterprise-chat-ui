@@ -1473,7 +1473,20 @@ class StandaloneIndexer:
             return ''
         
         method_signature = self._extract_method_signature(func, parsed, file_path)
-        method_fqcn = func.get('fqn', '') or f"{Path(file_path).stem}.{func.get('name', '')}"
+        
+        # Build method FQCN with package name: package.ClassName.methodName
+        method_fqcn = func.get('fqn', '')
+        if not method_fqcn:
+            # Extract package name
+            package = self._extract_package_name(parsed, file_path)
+            class_name = func.get('class_name', '') or Path(file_path).stem
+            method_name = func.get('name', '')
+            
+            # Build FQCN: package.ClassName.methodName (or ClassName.methodName if no package)
+            if package:
+                method_fqcn = f"{package}.{class_name}.{method_name}"
+            else:
+                method_fqcn = f"{class_name}.{method_name}"
         
         # Combine: project_id + method_signature + method_fqcn
         lookup_string = f"{self.project_id}:{method_signature}:{method_fqcn}"
@@ -1923,9 +1936,19 @@ class StandaloneIndexer:
         # Get relative path
         relative_path = self._get_relative_path(file_path)
         
+        # Build FQN with package name: package.ClassName.methodName (or ClassName.methodName if no package)
+        package = self._extract_package_name(parsed, file_path)
+        class_name = func.get('class_name', '') or Path(file_path).stem
+        method_name = func['name']
+        
+        if package:
+            fqn = f"{package}.{class_name}.{method_name}"
+        else:
+            fqn = f"{class_name}.{method_name}"
+        
         chunk = {
             'type': 'method',
-            'fqn': f"{Path(file_path).stem}.{func['name']}",
+            'fqn': fqn,
             'file_path': relative_path,  # Use relative path
             'start_line': func.get('start_line', 1),
             'end_line': func.get('end_line', 1),
