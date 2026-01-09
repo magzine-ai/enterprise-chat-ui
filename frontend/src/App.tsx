@@ -17,8 +17,6 @@ import {
   setConversations,
   addConversation,
   setCurrentConversation,
-  updateConversationThinkingMode,
-  updateConversationAgent,
 } from './store/slices/conversationsSlice';
 import { 
   setMessages, 
@@ -38,8 +36,6 @@ import { wsService } from './services/wsService';
 import ConversationSidebar from './components/ConversationSidebar';
 import MessageList from './components/MessageList';
 import MessageInput from './components/MessageInput';
-import ThinkingModeToggle from './components/ThinkingModeToggle';
-import AgentSelector from './components/AgentSelector';
 import './App.css';
 
 const AppContent: React.FC = () => {
@@ -357,6 +353,36 @@ const AppContent: React.FC = () => {
         });
     });
 
+    // WebSocket listener for activity status updates
+    const unsubscribeActivity = wsService.on('conversation.activity', (data) => {
+      console.log('📊 Activity status update received:', data);
+      
+      if (!data || !data.conversation_id || !data.activity) {
+        console.warn('⚠️ Invalid activity data:', data);
+        return;
+      }
+      
+      const conversationId = data.conversation_id;
+      const activity = data.activity;
+      const details = data.details || {};
+      
+      console.log('✅ Dispatching setActivity:', { conversationId, activity, details });
+      
+      // Update activity state
+      dispatch(setActivity({
+        conversationId,
+        activity,
+        details
+      }));
+      
+      // Verify it was set
+      setTimeout(() => {
+        const state = store.getState();
+        const activityState = state.activity.currentActivity[conversationId];
+        console.log('📊 Activity state after dispatch:', activityState);
+      }, 100);
+    });
+
     // Monitor WebSocket connection and auto-reconnect if disconnected
     const connectionMonitor = setInterval(() => {
       if (!wsService.isConnected()) {
@@ -437,31 +463,6 @@ const AppContent: React.FC = () => {
         </header>
         <main className="app-main">
           <MessageList />
-          <AgentSelector
-            conversationId={currentConversationId}
-            currentAgent={currentConversation?.agent}
-            onAgentChange={(agent) => {
-              if (currentConversationId) {
-                dispatch(updateConversationAgent({
-                  id: currentConversationId,
-                  agent,
-                }));
-              }
-            }}
-          />
-          <ThinkingModeToggle
-            conversationId={currentConversationId}
-            currentMode={currentConversation?.thinking_mode}
-            onModeChange={(mode) => {
-              // Update the conversation in the store
-              if (currentConversationId) {
-                dispatch(updateConversationThinkingMode({
-                  id: currentConversationId,
-                  thinking_mode: mode,
-                }));
-              }
-            }}
-          />
           <MessageInput />
         </main>
       </div>

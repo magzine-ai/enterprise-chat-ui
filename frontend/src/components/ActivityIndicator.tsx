@@ -20,7 +20,14 @@ const ActivityIndicator: React.FC<ActivityIndicatorProps> = ({ conversationId })
     if (!conversationId) {
       return null;
     }
-    return state.activity.currentActivity[conversationId] || null;
+    const activityData = state.activity.currentActivity[conversationId] || null;
+    // Debug logging
+    if (activityData) {
+      console.log('📊 ActivityIndicator: Activity found:', activityData);
+    } else {
+      console.log('📊 ActivityIndicator: No activity for conversation', conversationId, 'All activities:', state.activity.currentActivity);
+    }
+    return activityData;
   });
 
   // Don't render if no activity

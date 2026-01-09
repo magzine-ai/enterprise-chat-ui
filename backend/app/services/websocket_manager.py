@@ -1,6 +1,6 @@
 """WebSocket connection manager."""
 from fastapi import WebSocket
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import json
 
 

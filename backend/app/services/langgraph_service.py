@@ -92,6 +92,9 @@ async def classify_intent(state: ConversationState) -> ConversationState:
         details={"step": "intent_classification"}
     )
     
+    # Add delay to make activity visible
+    await asyncio.sleep(1.5)
+    
     user_message = state.get("user_message", "").lower().strip()
     intent = "general_chat"
     needs_splunk_query = False
@@ -172,6 +175,8 @@ async def generate_splunk_query(state: ConversationState) -> ConversationState:
             activity="RAG: Searching OpenSearch...",
             details={"step": "opensearch_retrieval"}
         )
+        # Add delay to make activity visible
+        await asyncio.sleep(1.5)
     
     # Retrieve relevant context from OpenSearch
     context = ""
@@ -193,6 +198,8 @@ async def generate_splunk_query(state: ConversationState) -> ConversationState:
         activity="Generating Splunk query...",
         details={"step": "query_generation"}
     )
+    # Add delay to make activity visible
+    await asyncio.sleep(1.5)
     
     # If LLM is available, use it to generate query with context
     if llm_service.is_available():
@@ -318,6 +325,8 @@ async def execute_splunk_query(state: ConversationState) -> ConversationState:
         activity="Executing Splunk query...",
         details={"step": "query_execution"}
     )
+    # Add delay to make activity visible
+    await asyncio.sleep(1.5)
     
     # Mock query execution - in production, this would call Splunk API
     # For now, create a query block that can be executed by the frontend
@@ -372,6 +381,8 @@ async def generate_llm_response(state: ConversationState) -> ConversationState:
         activity="Building response...",
         details={"step": "llm_generation"}
     )
+    # Add delay to make activity visible
+    await asyncio.sleep(1.5)
     
     # Check if LLM is available
     if not llm_service.is_available():
@@ -395,6 +406,8 @@ async def generate_llm_response(state: ConversationState) -> ConversationState:
             activity="Extracting blocks...",
             details={"step": "block_extraction"}
         )
+        # Add delay to make activity visible
+        await asyncio.sleep(1.0)
         
         # Extract blocks from response
         cleaned_text, blocks = llm_service.extract_blocks_from_response(
@@ -438,6 +451,8 @@ async def detect_exhaustive_search_needed(state: ConversationState) -> Conversat
         activity="Detecting search strategy...",
         details={"step": "exhaustive_search_detection"}
     )
+    # Add delay to make activity visible
+    await asyncio.sleep(1.5)
     
     try:
         with Session(engine) as session:
@@ -486,6 +501,8 @@ async def handle_java_code_question(state: ConversationState) -> ConversationSta
         activity="RAG: Searching code repository...",
         details={"step": "code_rag_search"}
     )
+    # Add delay to make activity visible
+    await asyncio.sleep(2.0)
     
     # Determine exhaustive search based on thinking mode
     # Deep thinking always uses exhaustive, thinking mode uses intelligent detection
@@ -526,6 +543,8 @@ async def handle_java_code_question(state: ConversationState) -> ConversationSta
                 activity="Building response from code search...",
                 details={"step": "code_response_generation", "evidence_count": len(result.get("evidence", []))}
             )
+            # Add delay to make activity visible
+            await asyncio.sleep(1.5)
             
             answer = result.get("answer", "")
             evidence = result.get("evidence", [])
@@ -849,6 +868,8 @@ async def process_conversation(
         activity=f"Agent: {agent}",
         details={"agent": agent, "thinking_mode": thinking_mode}
     )
+    # Add delay to make activity visible
+    await asyncio.sleep(1.0)
     
     # Detect mode change requests in message
     message_lower = user_message.lower().strip()
