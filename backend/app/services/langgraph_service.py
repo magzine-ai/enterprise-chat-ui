@@ -520,6 +520,13 @@ async def handle_java_code_question(state: ConversationState) -> ConversationSta
                 use_case=use_case
             )
             
+            # Broadcast activity: Building response from code search
+            await websocket_manager.send_activity_status(
+                conversation_id=conversation_id,
+                activity="Building response from code search...",
+                details={"step": "code_response_generation", "evidence_count": len(result.get("evidence", []))}
+            )
+            
             answer = result.get("answer", "")
             evidence = result.get("evidence", [])
             citations = result.get("citations", [])
