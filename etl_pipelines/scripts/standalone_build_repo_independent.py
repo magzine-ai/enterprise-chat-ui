@@ -774,7 +774,11 @@ class StandaloneParser:
         
         # Extract modifiers for signature generation
         modifiers = method.modifiers if hasattr(method, 'modifiers') and method.modifiers else []
-        return_type = str(method.return_type) if hasattr(method, 'return_type') and method.return_type else None
+        # Handle return_type: if None (void method), store None; otherwise convert to string
+        if hasattr(method, 'return_type') and method.return_type is not None:
+            return_type = str(method.return_type)
+        else:
+            return_type = None  # void method
         
         return {
             'name': method_name,
@@ -1270,7 +1274,7 @@ class StandaloneIndexer:
         # First, try to use stored modifiers/return_type from javalang extraction (if available)
         if func.get('modifiers') is not None or func.get('return_type') is not None:
             modifiers = func.get('modifiers', [])
-            return_type = func.get('return_type', 'void')
+            return_type = func.get('return_type') or 'void'  # Handle None -> 'void' for void methods
             
             # Extract parameters from method code
             params = ''
