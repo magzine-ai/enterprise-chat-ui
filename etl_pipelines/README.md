@@ -235,6 +235,37 @@ region = us-east-1
 - `--port-to-tigergraph` - Port NetworkX graph to TigerDB after building
 - `--port-graph-file` - Port existing NetworkX graph file to TigerDB (standalone operation)
 
+#### File Discovery and Test Directory Exclusion
+
+By default, the script automatically excludes test directories from being chunked and embedded. The following directories are excluded:
+
+**Build and Dependency Directories:**
+- `.git` - Git repository metadata
+- `node_modules` - Node.js dependencies
+- `target` - Maven build output
+- `build` - Build artifacts
+- `__pycache__` - Python cache
+- `.venv` - Python virtual environment
+
+**Test Directories:**
+- `test` - Standard test directory (Maven, Python)
+- `tests` - Alternative test directory (Python, Node.js)
+- `__tests__` - Node.js/React test directory
+- `spec` - Ruby/JavaScript spec directory
+- `test/java` - Maven Java test source
+- `test/resources` - Maven test resources
+- `src/test` - Maven standard test source
+- `src/test/java` - Maven Java test source
+- `src/test/resources` - Maven test resources
+
+**How It Works:**
+The script checks if any part of a file's path contains an excluded directory name. For example:
+- `src/main/java/UserService.java` ✅ **Included**
+- `src/test/java/UserServiceTest.java` ❌ **Excluded** (contains `test`)
+- `tests/unit/helper.py` ❌ **Excluded** (contains `tests`)
+
+This ensures that only production code is indexed, reducing noise and improving search relevance.
+
 ### 2. Query to HTML Report
 
 Query OpenSearch and generate HTML report:

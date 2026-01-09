@@ -1609,10 +1609,15 @@ class StandaloneIndexer:
             return None
     
     def find_code_files(self, repo_path: str) -> List[str]:
-        """Find all code files in repository."""
+        """Find all code files in repository, excluding test directories."""
         code_files = []
         repo = Path(repo_path)
-        exclude_dirs = {'.git', 'node_modules', 'target', 'build', '__pycache__', '.venv'}
+        exclude_dirs = {
+            '.git', 'node_modules', 'target', 'build', '__pycache__', '.venv',
+            # Test directories
+            'test', 'tests', '__tests__', 'spec', 'test/java', 'test/resources',
+            'src/test', 'src/test/java', 'src/test/resources'
+        }
         
         for ext in ['*.java', '*.py', '*.js', '*.jsx', '*.ts', '*.tsx']:
             for file in repo.rglob(ext):
