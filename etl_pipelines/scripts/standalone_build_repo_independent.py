@@ -1267,7 +1267,33 @@ class StandaloneIndexer:
         method_code = func.get('code', '')
         method_name = func.get('name', '')
         
-        # First, try to extract from javalang if available (most reliable)
+        # First, try to use stored modifiers/return_type from javalang extraction (if available)
+        if func.get('modifiers') is not None or func.get('return_type') is not None:
+            modifiers = func.get('modifiers', [])
+            return_type = func.get('return_type', 'void')
+            
+            # Extract parameters from method code
+            params = ''
+            if method_code:
+                paren_start = method_code.find('(')
+                if paren_start != -1:
+                    paren_count = 0
+                    for i in range(paren_start, len(method_code)):
+                        if method_code[i] == '(':
+                            paren_count += 1
+                        elif method_code[i] == ')':
+                            paren_count -= 1
+                            if paren_count == 0:
+                                params = method_code[paren_start + 1:i].strip()
+                                break
+            
+            modifiers_str = ' '.join(modifiers) if modifiers else ''
+            if modifiers_str:
+                return f"{modifiers_str} {return_type} {method_name}({params})"
+            else:
+                return f"{return_type} {method_name}({params})"
+        
+        # Second, try to extract from javalang tree if available (most reliable)
         if parsed.get('language') == 'java' and 'javalang_tree' in parsed:
             try:
                 tree = parsed.get('javalang_tree')
