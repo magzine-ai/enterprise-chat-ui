@@ -1263,6 +1263,36 @@ class StandaloneIndexer:
         
         return ''
     
+    def _sort_modifiers(self, modifiers: List[str]) -> List[str]:
+        """
+        Sort Java modifiers in the correct order according to Java conventions.
+        Order: access modifiers (public/private/protected) -> static -> final -> abstract -> 
+               synchronized -> native -> strictfp -> transient -> volatile
+        """
+        if not modifiers:
+            return []
+        
+        # Define modifier order (lower index = comes first)
+        modifier_order = {
+            'public': 0,
+            'private': 0,
+            'protected': 0,
+            'static': 1,
+            'final': 2,
+            'abstract': 3,
+            'synchronized': 4,
+            'native': 5,
+            'strictfp': 6,
+            'transient': 7,
+            'volatile': 8
+        }
+        
+        # Sort modifiers by their order, with access modifiers first
+        def get_order(mod):
+            return modifier_order.get(mod.lower(), 99)  # Unknown modifiers go last
+        
+        return sorted(modifiers, key=get_order)
+    
     def _extract_method_signature(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> str:
         """
         Extract full method signature including modifiers, return type, method name, and parameters.
@@ -1274,6 +1304,8 @@ class StandaloneIndexer:
         # First, try to use stored modifiers/return_type from javalang extraction (if available)
         if func.get('modifiers') is not None or func.get('return_type') is not None:
             modifiers = func.get('modifiers', [])
+            # Sort modifiers in correct Java order
+            modifiers = self._sort_modifiers(modifiers)
             return_type = func.get('return_type') or 'void'  # Handle None -> 'void' for void methods
             
             # Extract parameters from method code
@@ -1307,7 +1339,10 @@ class StandaloneIndexer:
                             for method in type_decl.methods:
                                 if method.name == method_name:
                                     # Build signature from javalang method
-                                    modifiers = ' '.join(method.modifiers) if hasattr(method, 'modifiers') and method.modifiers else ''
+                                    modifier_list = list(method.modifiers) if hasattr(method, 'modifiers') and method.modifiers else []
+                                    # Sort modifiers in correct Java order
+                                    modifier_list = self._sort_modifiers(modifier_list)
+                                    modifiers = ' '.join(modifier_list) if modifier_list else ''
                                     return_type = str(method.return_type) if hasattr(method, 'return_type') and method.return_type else 'void'
                                     
                                     # Build parameter string
@@ -1374,6 +1409,9 @@ class StandaloneIndexer:
                 for part in parts[:-1]:  # All parts except the last (method name)
                     if part in java_modifiers:
                         modifiers.append(part)
+                
+                # Sort modifiers in correct Java order
+                modifiers = self._sort_modifiers(modifiers)
                 
                 # Return type is everything between modifiers and method name
                 # Could be simple like "int" or complex like "List<String>" or "Map<String, Integer>"
