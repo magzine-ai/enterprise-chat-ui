@@ -308,6 +308,84 @@ class WebSocketManager:
             }
         }
         await self.broadcast(message)
+    
+    async def send_approval_request(
+        self,
+        conversation_id: int,
+        approval_id: str,
+        approval_type: str,
+        title: str,
+        content: str,
+        blocks: Optional[List[Dict]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        timeout: int = 300
+    ):
+        """
+        Send human approval request to frontend.
+        
+        Args:
+            conversation_id: ID of the conversation
+            approval_id: Unique ID for this approval request
+            approval_type: Type of approval ("review", "confirmation", "feedback")
+            title: Title for the approval dialog
+            content: Content to display
+            blocks: Optional structured blocks (code, tables, etc.)
+            options: Optional approval options (e.g., {"require_feedback": True})
+            timeout: Timeout in seconds (default: 5 minutes)
+        
+        Message Format:
+            {
+                "type": "conversation.approval.request",
+                "data": {
+                    "conversation_id": int,
+                    "approval_id": str,
+                    "approval_type": str,
+                    "title": str,
+                    "content": str,
+                    "blocks": List[Dict] (optional),
+                    "options": Dict (optional),
+                    "timeout": int
+                }
+            }
+        """
+        message = {
+            "type": "conversation.approval.request",
+            "data": {
+                "conversation_id": conversation_id,
+                "approval_id": approval_id,
+                "approval_type": approval_type,
+                "title": title,
+                "content": content,
+                "blocks": blocks or [],
+                "options": options or {},
+                "timeout": timeout
+            }
+        }
+        await self.broadcast(message)
+    
+    async def send_approval_response_received(
+        self,
+        conversation_id: int,
+        approval_id: str,
+        status: str
+    ):
+        """
+        Acknowledge that approval response was received.
+        
+        Args:
+            conversation_id: ID of the conversation
+            approval_id: ID of the approval request
+            status: Status of receipt ("received", "processing")
+        """
+        message = {
+            "type": "conversation.approval.ack",
+            "data": {
+                "conversation_id": conversation_id,
+                "approval_id": approval_id,
+                "status": status
+            }
+        }
+        await self.broadcast(message)
 
 
 websocket_manager = WebSocketManager()

@@ -723,3 +723,430 @@ async def get_messages(
         )
         for msg in messages
     ]
+
+
+@router.post("/{conversation_id}/messages/agentic")
+async def create_message_agentic(
+    conversation_id: int,
+    message: MessageCreate,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[str, Depends(get_current_user)],
+):
+    """
+    Create a new message in a conversation using Google ADK agentic processing.
+    
+    This endpoint uses the agentic conversation processor (conversations_agentic.py)
+    instead of LangGraph to generate assistant responses. Each agent execution step
+    automatically sends activity status updates via WebSocket.
+    
+    If user message, generates assistant response immediately using the selected agent.
+    Returns message data with assistant response if user message.
+    """
+    # Verify conversation exists
+    conversation = session.get(Conversation, conversation_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found"
+        )
+    
+    from datetime import datetime
+    from app.services.conversations_agentic import process_conversation_agentic
+    
+    # Create user message
+    db_message = Message(
+        content=message.content,
+        role=message.role,
+        conversation_id=conversation_id
+    )
+    if message.blocks:
+        db_message.set_blocks(message.blocks)
+    
+    session.add(db_message)
+    conversation.updated_at = datetime.utcnow()
+    session.add(conversation)
+    session.commit()
+    session.refresh(db_message)
+    
+    # Prepare message data for API response
+    message_data = MessageRead(
+        id=db_message.id,
+        content=db_message.content,
+        role=db_message.role,
+        conversation_id=db_message.conversation_id,
+        created_at=db_message.created_at,
+        blocks=db_message.get_blocks()
+    )
+    
+    # Generate assistant response if user sent a message
+    assistant_message_data = None
+    if message.role == "user":
+        try:
+            # Get conversation history for context
+            statement = select(Message).where(
+                Message.conversation_id == conversation_id
+            ).order_by(Message.created_at.desc()).limit(10)
+            recent_messages = session.exec(statement).all()
+            recent_messages.reverse()  # Oldest first
+            
+            # Convert message history to format expected by agentic processor
+            history = []
+            for msg in recent_messages:
+                history.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                    "blocks": msg.get_blocks()  # Include blocks with query results
+                })
+            
+            # Get thinking mode and agent from conversation
+            thinking_mode = conversation.thinking_mode if conversation else "thinking"
+            agent = conversation.agent if hasattr(conversation, "agent") and conversation.agent else "ask"
+            
+            # Process conversation using agentic processor
+            result = await process_conversation_agentic(
+                user_message=message.content,
+                conversation_id=conversation_id,
+                conversation_history=history,
+                thinking_mode=thinking_mode,
+                agent=agent
+            )
+            
+            # Extract response content and blocks
+            assistant_content = result.get("content", "")
+            assistant_blocks = result.get("blocks", [])
+            
+            # Update thinking mode and agent if changed
+            if conversation:
+                if result.get("thinking_mode") and result["thinking_mode"] != thinking_mode:
+                    conversation.thinking_mode = result["thinking_mode"]
+                if result.get("agent") and result["agent"] != agent:
+                    conversation.agent = result["agent"]
+                conversation.updated_at = datetime.utcnow()
+                session.add(conversation)
+            
+            # Create assistant message
+            assistant_message = Message(
+                content=assistant_content,
+                role="assistant",
+                conversation_id=conversation_id
+            )
+            if assistant_blocks:
+                assistant_message.set_blocks(assistant_blocks)
+            session.add(assistant_message)
+            
+            session.commit()
+            session.refresh(assistant_message)
+            
+            # Prepare assistant message data for response
+            assistant_message_data = MessageRead(
+                id=assistant_message.id,
+                content=assistant_message.content,
+                role=assistant_message.role,
+                conversation_id=assistant_message.conversation_id,
+                created_at=assistant_message.created_at,
+                blocks=assistant_message.get_blocks()
+            )
+            
+            # Broadcast assistant message via WebSocket
+            data_dict = assistant_message_data.model_dump()
+            if isinstance(data_dict.get('created_at'), datetime):
+                data_dict['created_at'] = data_dict['created_at'].isoformat()
+            
+            broadcast_message = {
+                "type": "message.new",
+                "data": data_dict
+            }
+            
+            await websocket_manager.broadcast(broadcast_message)
+            
+            print(f"✅ Generated and broadcast agentic assistant response for conversation {conversation_id}")
+            
+        except Exception as e:
+            print(f"❌ Error generating agentic assistant response: {e}")
+            import traceback
+            print(traceback.format_exc())
+            
+            # Create error message
+            error_message = Message(
+                content=f"I encountered an error processing your request: {str(e)}",
+                role="assistant",
+                conversation_id=conversation_id
+            )
+            session.add(error_message)
+            session.commit()
+            session.refresh(error_message)
+            
+            assistant_message_data = MessageRead(
+                id=error_message.id,
+                content=error_message.content,
+                role=error_message.role,
+                conversation_id=error_message.conversation_id,
+                created_at=error_message.created_at,
+                blocks=error_message.get_blocks()
+            )
+            
+            # Broadcast error message
+            data_dict = assistant_message_data.model_dump()
+            if isinstance(data_dict.get('created_at'), datetime):
+                data_dict['created_at'] = data_dict['created_at'].isoformat()
+            
+            await websocket_manager.broadcast({
+                "type": "message.new",
+                "data": data_dict
+            })
+    
+    # Return user message and assistant response (if any)
+    response_data = {
+        "user_message": message_data.model_dump()
+    }
+    
+    if assistant_message_data:
+        response_data["assistant_message"] = assistant_message_data.model_dump()
+    
+    return response_data
+
+
+@router.post("/{conversation_id}/messages/agentic-direct")
+async def create_message_agentic_direct(
+    conversation_id: int,
+    message: MessageCreate,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[str, Depends(get_current_user)],
+):
+    """
+    Create a new message using direct code-based agents (no agent-toolkit).
+    
+    Uses agents defined directly in Python code with Google ADK.
+    Automatically orchestrates workflow by selecting appropriate agents.
+    Each agent execution step sends activity status updates via WebSocket.
+    
+    If user message, generates assistant response immediately using the orchestrator.
+    Returns message data with assistant response if user message.
+    """
+    # Verify conversation exists
+    conversation = session.get(Conversation, conversation_id)
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found"
+        )
+    
+    from datetime import datetime
+    from app.services.conversations_agentic_direct import process_conversation_agentic_direct
+    
+    # Create user message
+    db_message = Message(
+        content=message.content,
+        role=message.role,
+        conversation_id=conversation_id
+    )
+    if message.blocks:
+        db_message.set_blocks(message.blocks)
+    
+    session.add(db_message)
+    conversation.updated_at = datetime.utcnow()
+    session.add(conversation)
+    session.commit()
+    session.refresh(db_message)
+    
+    message_data = MessageRead(
+        id=db_message.id,
+        content=db_message.content,
+        role=db_message.role,
+        conversation_id=db_message.conversation_id,
+        created_at=db_message.created_at,
+        blocks=db_message.get_blocks()
+    )
+    
+    # Generate assistant response if user sent a message
+    assistant_message_data = None
+    if message.role == "user":
+        try:
+            # Get conversation history
+            statement = select(Message).where(
+                Message.conversation_id == conversation_id
+            ).order_by(Message.created_at.desc()).limit(10)
+            recent_messages = session.exec(statement).all()
+            recent_messages.reverse()
+            
+            history = []
+            for msg in recent_messages:
+                history.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                    "blocks": msg.get_blocks()
+                })
+            
+            # Get thinking mode and agent from conversation
+            thinking_mode = conversation.thinking_mode if conversation else "thinking"
+            agent = conversation.agent if hasattr(conversation, "agent") and conversation.agent else "orchestrator"
+            
+            # Process using direct agents
+            result = await process_conversation_agentic_direct(
+                user_message=message.content,
+                conversation_id=conversation_id,
+                conversation_history=history,
+                thinking_mode=thinking_mode,
+                agent=agent  # Use "orchestrator" for automatic workflow
+            )
+            
+            assistant_content = result.get("content", "")
+            assistant_blocks = result.get("blocks", [])
+            
+            # Update thinking mode and agent if changed
+            if conversation:
+                if result.get("thinking_mode") and result["thinking_mode"] != thinking_mode:
+                    conversation.thinking_mode = result["thinking_mode"]
+                if result.get("agent") and result["agent"] != agent:
+                    conversation.agent = result["agent"]
+                conversation.updated_at = datetime.utcnow()
+                session.add(conversation)
+            
+            # Create assistant message
+            assistant_message = Message(
+                content=assistant_content,
+                role="assistant",
+                conversation_id=conversation_id
+            )
+            if assistant_blocks:
+                assistant_message.set_blocks(assistant_blocks)
+            session.add(assistant_message)
+            
+            session.commit()
+            session.refresh(assistant_message)
+            
+            assistant_message_data = MessageRead(
+                id=assistant_message.id,
+                content=assistant_message.content,
+                role=assistant_message.role,
+                conversation_id=assistant_message.conversation_id,
+                created_at=assistant_message.created_at,
+                blocks=assistant_message.get_blocks()
+            )
+            
+            # Broadcast via WebSocket
+            data_dict = assistant_message_data.model_dump()
+            if isinstance(data_dict.get('created_at'), datetime):
+                data_dict['created_at'] = data_dict['created_at'].isoformat()
+            
+            await websocket_manager.broadcast({
+                "type": "message.new",
+                "data": data_dict
+            })
+            
+            print(f"✅ Generated and broadcast direct agentic assistant response for conversation {conversation_id}")
+            
+        except Exception as e:
+            print(f"❌ Error generating direct agentic assistant response: {e}")
+            import traceback
+            print(traceback.format_exc())
+            
+            error_message = Message(
+                content=f"I encountered an error processing your request: {str(e)}",
+                role="assistant",
+                conversation_id=conversation_id
+            )
+            session.add(error_message)
+            session.commit()
+            session.refresh(error_message)
+            
+            assistant_message_data = MessageRead(
+                id=error_message.id,
+                content=error_message.content,
+                role=error_message.role,
+                conversation_id=error_message.conversation_id,
+                created_at=error_message.created_at,
+                blocks=error_message.get_blocks()
+            )
+            
+            # Broadcast error message
+            data_dict = assistant_message_data.model_dump()
+            if isinstance(data_dict.get('created_at'), datetime):
+                data_dict['created_at'] = data_dict['created_at'].isoformat()
+            
+            await websocket_manager.broadcast({
+                "type": "message.new",
+                "data": data_dict
+            })
+    
+    response_data = {"user_message": message_data.model_dump()}
+    if assistant_message_data:
+        response_data["assistant_message"] = assistant_message_data.model_dump()
+    
+    return response_data
+
+
+class ApprovalResponse(BaseModel):
+    """Approval response schema."""
+    approval_id: str
+    approved: bool
+    feedback: Optional[str] = None
+    response_data: Optional[Dict[str, Any]] = None
+
+
+@router.post("/approvals/{approval_id}/respond")
+async def submit_approval_response(
+    approval_id: str,
+    response: ApprovalResponse,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[str, Depends(get_current_user)],
+):
+    """
+    Submit a human approval response.
+    
+    This endpoint is called by the frontend when a user approves or rejects
+    an approval request from an agent workflow.
+    
+    Args:
+        approval_id: ID of the approval request (from URL path)
+        response: Approval response with approved/rejected status and optional feedback
+        
+    Returns:
+        Success status and approval details
+    """
+    from app.services.approval_manager import approval_manager
+    from app.services.websocket_manager import websocket_manager
+    
+    try:
+        # Use approval_id from path parameter (ensure consistency)
+        # Note: response.approval_id might be set, but we use path parameter as source of truth
+        success = await approval_manager.submit_approval_response(
+            approval_id=approval_id,
+            approved=response.approved,
+            feedback=response.feedback,
+            response_data=response.response_data or {}
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Approval request {approval_id} not found or already responded"
+            )
+        
+        # Get approval details
+        approval = approval_manager.get_approval(approval_id)
+        
+        # Send acknowledgment via WebSocket
+        if approval:
+            await websocket_manager.send_approval_response_received(
+                conversation_id=approval.conversation_id,
+                approval_id=approval_id,
+                status="received"
+            )
+        
+        return {
+            "success": True,
+            "approval_id": approval_id,
+            "approved": response.approved,
+            "message": "Approval response received successfully"
+        }
+        
+    except Exception as e:
+        print(f"❌ Error submitting approval response: {e}")
+        import traceback
+        print(traceback.format_exc())
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error submitting approval response: {str(e)}"
+        )

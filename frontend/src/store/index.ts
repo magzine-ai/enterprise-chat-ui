@@ -17,6 +17,7 @@ import messagesReducer from './slices/messagesSlice';
 import jobsReducer from './slices/jobsSlice';
 import conversationsReducer from './slices/conversationsSlice';
 import activityReducer from './slices/activitySlice';
+import approvalReducer from './slices/approvalSlice';
 
 export const store = configureStore({
   reducer: {
@@ -24,6 +25,7 @@ export const store = configureStore({
     jobs: jobsReducer,
     conversations: conversationsReducer,
     activity: activityReducer,
+    approval: approvalReducer,
   },
 });
 

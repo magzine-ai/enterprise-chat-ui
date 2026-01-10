@@ -83,6 +83,8 @@ export class WebSocketService {
    * - 'message.stream.chunk': Chunk received during streaming
    * - 'message.stream.end': Streaming response completed
    * - 'conversation.activity': Activity status update (agent, RAG, response building)
+   * - 'conversation.approval.request': Human approval request from agent workflow
+   * - 'conversation.approval.ack': Approval response acknowledgment
    * 
    * @param event Event type to listen for
    * @param callback Callback function to invoke when event is received

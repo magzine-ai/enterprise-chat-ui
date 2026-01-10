@@ -30,12 +30,15 @@ import {
 } from './store/slices/messagesSlice';
 import { updateJob } from './store/slices/jobsSlice';
 import { setActivity, clearActivity } from './store/slices/activitySlice';
+import { addApprovalRequest, removeApprovalRequest } from './store/slices/approvalSlice';
 // Use API service (switches between real and mock based on config)
 import { apiService } from './services/apiService';
 import { wsService } from './services/wsService';
 import ConversationSidebar from './components/ConversationSidebar';
 import MessageList from './components/MessageList';
 import MessageInput from './components/MessageInput';
+import ApprovalDialog from './components/ApprovalDialog';
+import type { ApprovalRequest } from './components/ApprovalDialog';
 import './App.css';
 
 const AppContent: React.FC = () => {
@@ -48,6 +51,13 @@ const AppContent: React.FC = () => {
       conv => conv.id === currentConversationId
     )
   );
+  const currentApprovalId = useAppSelector(
+    (state) => state.approval.currentApprovalId
+  );
+  const pendingApprovals = useAppSelector(
+    (state) => state.approval.pendingApprovals
+  );
+  const currentApproval = currentApprovalId ? pendingApprovals[currentApprovalId] : null;
 
 
   useEffect(() => {
@@ -383,6 +393,32 @@ const AppContent: React.FC = () => {
       }, 100);
     });
 
+    // WebSocket listener for approval requests
+    const unsubscribeApproval = wsService.on('conversation.approval.request', (data) => {
+      console.log('🔔 Approval request received:', data);
+      
+      if (!data || !data.conversation_id || !data.approval_id) {
+        console.warn('⚠️ Invalid approval request data:', data);
+        return;
+      }
+      
+      const approvalRequest: ApprovalRequest = {
+        approval_id: data.approval_id,
+        conversation_id: data.conversation_id,
+        approval_type: data.approval_type || 'review',
+        title: data.title || 'Approval Required',
+        content: data.content || '',
+        blocks: data.blocks || [],
+        options: data.options || {},
+        timeout: data.timeout || 300,
+      };
+      
+      console.log('✅ Adding approval request to state:', approvalRequest);
+      
+      // Add approval request to state (this will trigger ApprovalDialog to show)
+      dispatch(addApprovalRequest(approvalRequest));
+    });
+
     // Monitor WebSocket connection and auto-reconnect if disconnected
     const connectionMonitor = setInterval(() => {
       if (!wsService.isConnected()) {
@@ -397,6 +433,7 @@ const AppContent: React.FC = () => {
       unsubscribeMessage();
       unsubscribeJob();
       unsubscribeActivity();
+      unsubscribeApproval();
       unsubscribeStreamStart();
       unsubscribeStreamToken();
       unsubscribeStreamChunk();
@@ -466,6 +503,44 @@ const AppContent: React.FC = () => {
           <MessageInput />
         </main>
       </div>
+      {currentApproval && (
+        <ApprovalDialog
+          request={currentApproval}
+          onApprove={async (approvalId, approved, feedback) => {
+            try {
+              console.log('Submitting approval response:', { approvalId, approved, feedback });
+              await apiService.submitApprovalResponse(approvalId, approved, feedback);
+              
+              // Remove approval from state after submission
+              dispatch(removeApprovalRequest(approvalId));
+              
+              // Show activity status
+              if (approved) {
+                dispatch(setActivity({
+                  conversationId: currentApproval.conversation_id,
+                  activity: 'Approval submitted: Approved',
+                  details: { approval_id: approvalId, approved: true }
+                }));
+              } else {
+                dispatch(setActivity({
+                  conversationId: currentApproval.conversation_id,
+                  activity: 'Approval submitted: Rejected',
+                  details: { approval_id: approvalId, approved: false }
+                }));
+              }
+            } catch (error) {
+              console.error('Error submitting approval:', error);
+              alert(`Failed to submit approval: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+          }}
+          onClose={() => {
+            // Close dialog without submitting (optional - can be used for cancellation)
+            if (currentApprovalId) {
+              dispatch(removeApprovalRequest(currentApprovalId));
+            }
+          }}
+        />
+      )}
     </div>
   );
 };

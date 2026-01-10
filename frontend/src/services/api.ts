@@ -284,6 +284,38 @@ class ApiService {
       body: JSON.stringify({ query, repository_id: repositoryId }),
     });
   }
+
+  // Agentic Conversation - Direct agents
+  async createMessageAgenticDirect(
+    conversationId: number,
+    content: string,
+    role: 'user' | 'assistant' = 'user',
+    blocks?: any[]
+  ): Promise<{ user_message: Message; assistant_message?: Message }> {
+    return this.request(`/conversations/${conversationId}/messages/agentic-direct`, {
+      method: 'POST',
+      body: JSON.stringify({ content, role, blocks }),
+    });
+  }
+
+  // Approval Response (under conversations router)
+  async submitApprovalResponse(
+    approvalId: string,
+    approved: boolean,
+    feedback?: string,
+    responseData?: Record<string, any>
+  ): Promise<{ success: boolean; approval_id: string; approved: boolean; message: string }> {
+    // Path: /conversations/approvals/{approval_id}/respond (router prefix + endpoint)
+    return this.request(`/conversations/approvals/${approvalId}/respond`, {
+      method: 'POST',
+      body: JSON.stringify({
+        approval_id: approvalId,
+        approved,
+        feedback,
+        response_data: responseData,
+      }),
+    });
+  }
 }
 
 export const apiService = new ApiService();
