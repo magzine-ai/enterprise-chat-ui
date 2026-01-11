@@ -777,6 +777,8 @@ class StandaloneParser:
         # Handle return_type: store the raw javalang type object (will be formatted later in _extract_method_signature)
         # If None (void method), store None
         return_type = method.return_type if hasattr(method, 'return_type') and method.return_type is not None else None
+        # Extract throws clause: store list of exception types (will be formatted later)
+        throws = list(method.throws) if hasattr(method, 'throws') and method.throws else []
         
         return {
             'name': method_name,
@@ -786,7 +788,8 @@ class StandaloneParser:
             'code': method_code,
             'calls': calls,
             'modifiers': modifiers,  # Store modifiers for signature extraction
-            'return_type': return_type  # Store return type for signature extraction
+            'return_type': return_type,  # Store return type for signature extraction
+            'throws': throws  # Store throws clause for signature extraction
         }
     
     def _get_field_code_from_content(self, field_decl: javalang.tree.FieldDeclaration, declarator: javalang.tree.VariableDeclarator, content: str) -> str:
@@ -1352,10 +1355,36 @@ class StandaloneIndexer:
         # Simple type
         return type_name
     
+    def _format_throws_clause(self, throws_list) -> str:
+        """
+        Format a list of exception types into a throws clause string.
+        
+        Args:
+            throws_list: List of exception types (can be javalang type objects or strings)
+        
+        Returns:
+            Formatted throws clause string, e.g., "throws IOException, SQLException" or empty string
+        """
+        if not throws_list:
+            return ''
+        
+        # Format each exception type
+        exception_types = []
+        for exc_type in throws_list:
+            if exc_type:
+                # Format exception type (handles javalang objects)
+                exc_type_str = self._format_javalang_type(exc_type)
+                exception_types.append(exc_type_str)
+        
+        if exception_types:
+            return f" throws {', '.join(exception_types)}"
+        return ''
+    
     def _extract_method_signature(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> str:
         """
-        Extract full method signature including modifiers, return type, method name, and parameters.
+        Extract full method signature including modifiers, return type, method name, parameters, and throws clause.
         Example: "public static int getNumber(String numString)"
+        Example with throws: "public void process() throws IOException, SQLException"
         """
         method_code = func.get('code', '')
         method_name = func.get('name', '')
@@ -1384,11 +1413,15 @@ class StandaloneIndexer:
                                 params = method_code[paren_start + 1:i].strip()
                                 break
             
+            # Extract and format throws clause
+            throws_list = func.get('throws', [])
+            throws_clause = self._format_throws_clause(throws_list) if throws_list else ''
+            
             modifiers_str = ' '.join(modifiers) if modifiers else ''
             if modifiers_str:
-                return f"{modifiers_str} {return_type} {method_name}({params})"
+                return f"{modifiers_str} {return_type} {method_name}({params}){throws_clause}"
             else:
-                return f"{return_type} {method_name}({params})"
+                return f"{return_type} {method_name}({params}){throws_clause}"
         
         # Second, try to extract from javalang tree if available (most reliable)
         if parsed.get('language') == 'java' and 'javalang_tree' in parsed:
@@ -1421,10 +1454,14 @@ class StandaloneIndexer:
                                                 params.append(param_type)
                                     params_str = ', '.join(params)
                                     
+                                    # Extract and format throws clause
+                                    throws_list = list(method.throws) if hasattr(method, 'throws') and method.throws else []
+                                    throws_clause = self._format_throws_clause(throws_list) if throws_list else ''
+                                    
                                     if modifiers:
-                                        return f"{modifiers} {return_type} {method_name}({params_str})"
+                                        return f"{modifiers} {return_type} {method_name}({params_str}){throws_clause}"
                                     else:
-                                        return f"{return_type} {method_name}({params_str})"
+                                        return f"{return_type} {method_name}({params_str}){throws_clause}"
             except Exception:
                 pass
         
@@ -1509,12 +1546,28 @@ class StandaloneIndexer:
                 else:
                     params = ''
                 
-                # Build full signature: modifiers return_type method_name(parameters)
+                # Extract throws clause from method code (after closing parenthesis)
+                throws_clause = ''
+                if paren_end > 0:
+                    # Look for "throws" keyword after the closing parenthesis
+                    after_params = full_method_text[paren_end + 1:].strip()
+                    throws_match = re.search(r'\bthrows\s+([^{]+)', after_params)
+                    if throws_match:
+                        # Extract exception types
+                        exceptions_text = throws_match.group(1).strip()
+                        # Split by comma and clean up
+                        exception_types = [exc.strip() for exc in exceptions_text.split(',')]
+                        # Filter out empty strings and limit to exception types before opening brace
+                        exception_types = [exc.split('{')[0].strip() for exc in exception_types if exc.strip()]
+                        if exception_types:
+                            throws_clause = f" throws {', '.join(exception_types)}"
+                
+                # Build full signature: modifiers return_type method_name(parameters) throws ...
                 modifiers_str = ' '.join(modifiers) if modifiers else ''
                 if modifiers_str:
-                    signature = f"{modifiers_str} {return_type} {method_name_part}({params})"
+                    signature = f"{modifiers_str} {return_type} {method_name_part}({params}){throws_clause}"
                 else:
-                    signature = f"{return_type} {method_name_part}({params})"
+                    signature = f"{return_type} {method_name_part}({params}){throws_clause}"
                 
                 return signature.strip()
         
