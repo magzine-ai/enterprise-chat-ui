@@ -774,11 +774,9 @@ class StandaloneParser:
         
         # Extract modifiers for signature generation
         modifiers = method.modifiers if hasattr(method, 'modifiers') and method.modifiers else []
-        # Handle return_type: if None (void method), store None; otherwise convert to string
-        if hasattr(method, 'return_type') and method.return_type is not None:
-            return_type = str(method.return_type)
-        else:
-            return_type = None  # void method
+        # Handle return_type: store the raw javalang type object (will be formatted later in _extract_method_signature)
+        # If None (void method), store None
+        return_type = method.return_type if hasattr(method, 'return_type') and method.return_type is not None else None
         
         return {
             'name': method_name,
@@ -1293,6 +1291,67 @@ class StandaloneIndexer:
         
         return sorted(modifiers, key=get_order)
     
+    def _format_javalang_type(self, type_obj) -> str:
+        """
+        Format a javalang type object into a clean Java type string.
+        Handles simple types, generics, and arrays.
+        
+        Examples:
+            BasicType(name='int') -> "int"
+            ReferenceType(name='String') -> "String"
+            ReferenceType(name='List', arguments=[ReferenceType(name='String')]) -> "List<String>"
+            ReferenceType(name='Map', arguments=[ReferenceType(name='String'), ReferenceType(name='Integer')]) -> "Map<String, Integer>"
+        """
+        if type_obj is None:
+            return 'void'
+        
+        # If it's already a string, return as-is
+        if isinstance(type_obj, str):
+            return type_obj
+        
+        # Check if it's a javalang BasicType (primitives: int, boolean, etc.)
+        if JAVALANG_AVAILABLE:
+            import javalang.tree
+            if isinstance(type_obj, javalang.tree.BasicType):
+                type_name = type_obj.name
+                # Handle arrays for BasicType
+                if hasattr(type_obj, 'dimensions') and type_obj.dimensions:
+                    dims = '[]' * len(type_obj.dimensions)
+                    return f"{type_name}{dims}"
+                return type_name
+        
+        # Check if it's a javalang ReferenceType or has a 'name' attribute
+        if not hasattr(type_obj, 'name'):
+            # Fallback to string representation
+            return str(type_obj)
+        
+        type_name = type_obj.name
+        
+        # Handle generic types (with type arguments)
+        if hasattr(type_obj, 'arguments') and type_obj.arguments:
+            # Format type arguments
+            arg_strings = []
+            for arg in type_obj.arguments:
+                if hasattr(arg, 'type'):
+                    # TypeArgument with a type
+                    arg_type = self._format_javalang_type(arg.type)
+                    arg_strings.append(arg_type)
+                else:
+                    # Direct type argument
+                    arg_type = self._format_javalang_type(arg)
+                    arg_strings.append(arg_type)
+            
+            # Build generic type: TypeName<Arg1, Arg2, ...>
+            return f"{type_name}<{', '.join(arg_strings)}>"
+        
+        # Handle arrays (dimensions)
+        if hasattr(type_obj, 'dimensions') and type_obj.dimensions:
+            dims = '[]' * len(type_obj.dimensions)
+            return f"{type_name}{dims}"
+        
+        # Simple type
+        return type_name
+    
     def _extract_method_signature(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> str:
         """
         Extract full method signature including modifiers, return type, method name, and parameters.
@@ -1306,7 +1365,9 @@ class StandaloneIndexer:
             modifiers = func.get('modifiers', [])
             # Sort modifiers in correct Java order
             modifiers = self._sort_modifiers(modifiers)
-            return_type = func.get('return_type') or 'void'  # Handle None -> 'void' for void methods
+            # Format return type properly (handles javalang objects)
+            raw_return_type = func.get('return_type')
+            return_type = self._format_javalang_type(raw_return_type) if raw_return_type else 'void'
             
             # Extract parameters from method code
             params = ''
@@ -1343,13 +1404,16 @@ class StandaloneIndexer:
                                     # Sort modifiers in correct Java order
                                     modifier_list = self._sort_modifiers(modifier_list)
                                     modifiers = ' '.join(modifier_list) if modifier_list else ''
-                                    return_type = str(method.return_type) if hasattr(method, 'return_type') and method.return_type else 'void'
+                                    # Format return type properly (handles javalang objects)
+                                    raw_return_type = method.return_type if hasattr(method, 'return_type') and method.return_type else None
+                                    return_type = self._format_javalang_type(raw_return_type)
                                     
                                     # Build parameter string
                                     params = []
                                     if hasattr(method, 'parameters') and method.parameters:
                                         for p in method.parameters:
-                                            param_type = str(p.type)
+                                            # Format parameter type properly (handles javalang objects)
+                                            param_type = self._format_javalang_type(p.type) if hasattr(p, 'type') and p.type else 'Object'
                                             param_name = p.name if hasattr(p, 'name') else ''
                                             if param_name:
                                                 params.append(f"{param_type} {param_name}")
@@ -1714,12 +1778,12 @@ class StandaloneIndexer:
             # Sequential processing with progress bar
             file_iter = tqdm(code_files, desc="Processing files") if TQDM_AVAILABLE else code_files
             for file_path in file_iter:
-                parsed = self.parser.parse_file(file_path)
-                if not parsed:
-                    continue
-                
-                file_chunks = self._generate_chunks_for_file(parsed, file_path)
-                all_chunks.extend(file_chunks)
+            parsed = self.parser.parse_file(file_path)
+            if not parsed:
+                continue
+            
+            file_chunks = self._generate_chunks_for_file(parsed, file_path)
+            all_chunks.extend(file_chunks)
                 processed_files.add(file_path)
                 
                 # Save checkpoint periodically
@@ -1749,8 +1813,8 @@ class StandaloneIndexer:
             # Add embeddings to chunks with progress bar
             embed_iter = tqdm(zip(all_chunks, embeddings), total=len(all_chunks), desc="Adding embeddings") if TQDM_AVAILABLE else zip(all_chunks, embeddings)
             for chunk, embedding in embed_iter:
-                if embedding:
-                    chunk['embedding'] = embedding
+            if embedding:
+                chunk['embedding'] = embedding
         
         # Generate statistics with pandas if available
         if PANDAS_AVAILABLE and all_chunks:
@@ -2838,7 +2902,7 @@ class StandaloneOpenSearch:
                         error_count += errors
                         if error_msg:
                             error_messages.append(error_msg)
-                    except Exception as e:
+            except Exception as e:
                         error_count += len(batches[batch_idx])
                         error_messages.append(f"Batch {batch_idx+1}: {str(e)}")
                     
