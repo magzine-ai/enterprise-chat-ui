@@ -150,34 +150,63 @@ class StandaloneParser:
             tree = parser.parse(bytes(content, 'utf8'))
             root = tree.root_node
             
+            functions = self._extract_functions(root, content, language)
+            classes = self._extract_classes(root, content, language)
+            imports = self._extract_imports(root, content, language)
+            
+            # Debug: print extraction results for first few files
+            if not hasattr(self, '_parse_debug_count'):
+                self._parse_debug_count = 0
+            
+            if self._parse_debug_count < 3:
+                print(f"   📄 {Path(file_path).name}: {len(classes)} classes, {len(functions)} methods")
+                self._parse_debug_count += 1
+            
             return {
                 'language': language,
                 'file_path': file_path,
-                'functions': self._extract_functions(root, content, language),
-                'classes': self._extract_classes(root, content, language),
-                'imports': self._extract_imports(root, content, language),
+                'file_content': content,  # Store full content for fallback
+                'functions': functions,
+                'classes': classes,
+                'imports': imports,
             }
         except Exception as e:
             print(f"⚠️ Error parsing {file_path}: {e}")
+            import traceback
+            if not hasattr(self, '_error_count'):
+                self._error_count = 0
+            if self._error_count < 5:  # Show first 5 errors
+                print(traceback.format_exc())
+                self._error_count += 1
             return None
     
     def _extract_functions(self, root, content: str, language: str) -> List[Dict[str, Any]]:
         """Extract function/method definitions."""
         functions = []
         # Simplified extraction - traverse AST for function nodes
-        def traverse(node):
-            if node.type == 'method_declaration' or node.type == 'function_definition':
+        def traverse(node, parent_class: Optional[str] = None):
+            if node.type == 'class_declaration':
+                # Extract class name for nested methods
+                class_name_node = node.child_by_field_name('name')
+                current_class = content[class_name_node.start_byte:class_name_node.end_byte] if class_name_node else None
+                # Continue traversing inside the class
+                for child in node.children:
+                    traverse(child, current_class)
+            elif node.type == 'method_declaration' or node.type == 'function_definition':
                 name_node = node.child_by_field_name('name')
                 if name_node:
                     name = content[name_node.start_byte:name_node.end_byte]
                     functions.append({
                         'name': name,
+                        'class_name': parent_class,  # Store parent class for Java methods
                         'start_line': node.start_point[0] + 1,
                         'end_line': node.end_point[0] + 1,
                         'code': content[node.start_byte:node.end_byte]
                     })
-            for child in node.children:
-                traverse(child)
+            else:
+                # Continue traversing for other node types
+                for child in node.children:
+                    traverse(child, parent_class)
         
         traverse(root)
         return functions
@@ -190,10 +219,13 @@ class StandaloneParser:
                 name_node = node.child_by_field_name('name')
                 if name_node:
                     name = content[name_node.start_byte:name_node.end_byte]
+                    # Extract full class code (needed for class metadata chunks)
+                    class_code = content[node.start_byte:node.end_byte]
                     classes.append({
                         'name': name,
                         'start_line': node.start_point[0] + 1,
                         'end_line': node.end_point[0] + 1,
+                        'code': class_code,  # Include class code for chunk generation
                     })
             for child in node.children:
                 traverse(child)
@@ -276,15 +308,28 @@ class StandaloneIndexer:
         print(f"   Found {len(code_files)} code files")
         
         all_chunks = []
+        files_with_chunks = 0
+        files_without_chunks = 0
         
         for file_path in code_files:
             parsed = self.parser.parse_file(file_path)
             if not parsed:
+                files_without_chunks += 1
                 continue
             
             # Generate chunks based on strategy
             file_chunks = self._generate_chunks_for_file(parsed, file_path)
-            all_chunks.extend(file_chunks)
+            if file_chunks:
+                files_with_chunks += 1
+                all_chunks.extend(file_chunks)
+            else:
+                files_without_chunks += 1
+                # Debug: show why no chunks were generated
+                if files_without_chunks <= 5:
+                    print(f"   ⚠️ No chunks for {Path(file_path).name}: {len(parsed.get('functions', []))} methods, {len(parsed.get('classes', []))} classes")
+        
+        if files_without_chunks > 0:
+            print(f"   📊 Files with chunks: {files_with_chunks}, Files without chunks: {files_without_chunks}")
         
         # Generate embeddings for all chunks
         print(f"📊 Generated {len(all_chunks)} chunks, generating embeddings...")
@@ -439,13 +484,49 @@ class StandaloneIndexer:
     
     def _create_method_chunk(self, func: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> Dict[str, Any]:
         """Create a method chunk."""
+        method_code = func.get('code', '')
+        
+        # If no code extracted, try to get from file content
+        if not method_code:
+            file_content = parsed.get('file_content', '')
+            method_name = func.get('name', '')
+            if file_content and method_name:
+                # Look for method declaration
+                pattern = rf'\b{re.escape(method_name)}\s*\('
+                match = re.search(pattern, file_content)
+                if match:
+                    # Try to extract method body (simplified)
+                    start_pos = match.start()
+                    # Go back to find method start
+                    line_start = file_content.rfind('\n', max(0, start_pos - 200), start_pos)
+                    if line_start == -1:
+                        line_start = max(0, start_pos - 200)
+                    # Find opening brace
+                    brace_pos = file_content.find('{', start_pos)
+                    if brace_pos != -1:
+                        # Find matching closing brace (simplified)
+                        brace_count = 0
+                        for i in range(brace_pos, min(brace_pos + 5000, len(file_content))):
+                            if file_content[i] == '{':
+                                brace_count += 1
+                            elif file_content[i] == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    method_code = file_content[line_start:i + 1]
+                                    break
+        
+        # If still no code, create a minimal placeholder
+        if not method_code:
+            method_name = func.get('name', 'Unknown')
+            method_code = f"method {method_name}()"
+        
         return {
             'type': 'method',
             'fqn': f"{Path(file_path).stem}.{func['name']}",
             'file_path': file_path,
             'start_line': func.get('start_line', 1),
             'end_line': func.get('end_line', 1),
-            'code': func.get('code', ''),
+            'code': method_code,
             'summary': f"Method {func['name']}",
             'language': parsed.get('language', 'unknown'),
         }
@@ -454,14 +535,38 @@ class StandaloneIndexer:
         """Create a class metadata chunk (signature only, no full body)."""
         # Extract only class signature, not full body
         class_code = cls.get('code', '')
-        signature = class_code.split('{')[0] if '{' in class_code else class_code[:200]
+        
+        # If no code extracted, try to construct a basic signature
+        if not class_code:
+            class_name = cls.get('name', 'Unknown')
+            # Try to get from file content if available
+            file_content = parsed.get('file_content', '')
+            if file_content:
+                # Look for class declaration in file content
+                pattern = rf'\bclass\s+{re.escape(class_name)}\b'
+                match = re.search(pattern, file_content)
+                if match:
+                    # Extract up to opening brace
+                    start_pos = match.start()
+                    brace_pos = file_content.find('{', start_pos)
+                    if brace_pos != -1:
+                        class_code = file_content[start_pos:brace_pos + 1]
+                    else:
+                        class_code = f"class {class_name}"
+                else:
+                    class_code = f"class {class_name}"
+            else:
+                class_code = f"class {class_name}"
+        
+        # Extract signature (everything before opening brace)
+        signature = class_code.split('{')[0].strip() + ' {' if '{' in class_code else class_code[:200]
         
         return {
             'type': 'class',
             'fqn': f"{Path(file_path).stem}.{cls['name']}",
             'file_path': file_path,
             'start_line': cls.get('start_line', 1),
-            'end_line': cls.get('start_line', 1),  # Just signature line
+            'end_line': cls.get('end_line', cls.get('start_line', 1)),
             'code': signature,  # Only signature, not full body
             'summary': f"Class {cls['name']}",
             'language': parsed.get('language', 'unknown'),
