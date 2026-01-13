@@ -22,24 +22,18 @@ flowchart TB
     %% Orchestrator - Central Hub
     Orchestrator[🎯<br/><b>Orchestrator Agent</b><br/><small>Intelligent Routing</small>]
     
-    %% Primary Agents - Left Side
-    subgraph PrimaryAgents["🔵 Primary Agents"]
+    %% Agents - Single Layer
+    subgraph Agents["🤖 Specialized Agents"]
         direction TB
         API[🔍<br/><b>API Discovery</b><br/><small>RAG Search</small>]
-        Splunk[📊<br/><b>Splunk Agent</b><br/><small>Log Analysis</small>]
-    end
-    
-    %% Secondary Agents - Right Side
-    subgraph SecondaryAgents["🟠 Secondary Agents"]
-        direction TB
+        Splunk[🔍<br/><b>Splunk Agent</b><br/><small>Log Analysis</small>]
         CodeAnalyzer[💻<br/><b>Code Analyzer</b><br/><small>Code Intelligence</small>]
         JIRA[🎫<br/><b>JIRA Agent</b><br/><small>Issue Tracking</small>]
         SNOW[❄️<br/><b>SNOW Agent</b><br/><small>ITSM</small>]
     end
     
     %% Orchestrator Routes
-    Orchestrator -->|Primary Path| PrimaryAgents
-    Orchestrator -->|Secondary Path| SecondaryAgents
+    Orchestrator --> Agents
     
     %% Search Mechanisms
     subgraph SearchLayer["🔍 Search & Retrieval Layer"]
@@ -47,7 +41,7 @@ flowchart TB
         RAG1[🔎<br/><b>RAG Search</b><br/><small>Semantic Similarity</small>]
         RAG2[🔎<br/><b>RAG Search</b><br/><small>Code Context</small>]
         GraphSearch[🕸️<br/><b>Graph Search</b><br/><small>Relationships</small>]
-        SplunkQuery[📊<br/><b>Splunk Query</b><br/><small>Log Retrieval</small>]
+        SplunkQuery[🔍<br/><b>Splunk Query</b><br/><small>Log Retrieval</small>]
         JIRAMetrics[📈<br/><b>JIRA Metrics</b><br/><small>Issue Data</small>]
         SNOWMetrics[📈<br/><b>SNOW Metrics</b><br/><small>Ticket Data</small>]
     end
@@ -63,9 +57,9 @@ flowchart TB
     %% Data Stores - Bottom Layer
     subgraph DataStores["🗄️ Data Stores"]
         direction TB
-        OpenSearch[(🔎<br/><b>OpenSearch</b><br/><small>Vector + Metadata</small>)]
-        GraphDB[(🕸️<br/><b>Graph Database</b><br/><small>TigerDB/NetworkX</small>)]
-        SplunkStore[(📊<br/><b>Splunk</b><br/><small>Logs & Metrics</small>)]
+        OpenSearch[(🔍<br/><b>OpenSearch</b><br/><small>Vector + Metadata</small>)]
+        GraphDB[(🕸️🐅<br/><b>Graph Database</b><br/><small>TigerDB/NetworkX</small>)]
+        SplunkStore[(🔍<br/><b>Splunk</b><br/><small>Logs & Metrics</small>)]
         JIRAStore[(🎫<br/><b>JIRA</b><br/><small>Issues & Metrics</small>)]
         SNOWStore[(❄️<br/><b>ServiceNow</b><br/><small>Tickets & Metrics</small>)]
     end
@@ -92,7 +86,7 @@ flowchart TB
         Parser[📝<br/><b>Code Parser</b><br/><small>AST Extraction</small>]
         Chunker[✂️<br/><b>Chunking Engine</b><br/><small>Strategy-based</small>]
         Embedder[🧮<br/><b>Embedding Generator</b><br/><small>Azure/OpenAI</small>]
-        GraphBuilder[🕸️<br/><b>Graph Builder</b><br/><small>NetworkX/TigerDB</small>]
+        GraphBuilder[🕸️🐅<br/><b>Graph Builder</b><br/><small>NetworkX/TigerDB</small>]
         
         Parser --> Chunker
         Chunker --> Embedder
@@ -129,19 +123,17 @@ flowchart TB
     Response -.->|Context Shared| Orchestrator
     Response -.->|Memory| LLM
     
-    %% Security & Configuration - Top Right
-    subgraph Security["🔐 Security & Configuration"]
+    %% Agent Features
+    subgraph AgentFeatures["🛡️ Agent Features"]
         direction TB
-        Auth[🔑<br/><b>Authentication</b><br/><small>AWS/Certificate</small>]
-        Config[⚙️<br/><b>Config Manager</b><br/><small>Settings & Secrets</small>]
+        Resiliency[🔄<br/><b>Resiliency</b><br/><small>Retry & Circuit Breaker</small>]
+        Memory[💾<br/><b>Memory Persistence</b><br/><small>Context & History</small>]
     end
     
-    %% Security Connections
-    Auth -.->|Secures| OpenSearch
-    Auth -.->|Secures| GraphDB
-    Auth -.->|Secures| SplunkStore
-    Config -.->|Configures| Orchestrator
-    Config -.->|Configures| ETLPipeline
+    %% Agent Features Connections
+    Resiliency -.->|Enables| Agents
+    Memory -.->|Enables| Agents
+    Memory -.->|Stores| LLM
     
     %% Styling with better colors and UX
     classDef userStyle fill:#E3F2FD,stroke:#1976D2,stroke-width:3px,color:#000
@@ -154,19 +146,18 @@ flowchart TB
     classDef etlStyle fill:#E0F2F1,stroke:#00695C,stroke-width:2px,color:#000
     classDef llmStyle fill:#FFEBEE,stroke:#C62828,stroke-width:3px,color:#000
     classDef responseStyle fill:#FFF3E0,stroke:#E65100,stroke-width:3px,color:#000
-    classDef securityStyle fill:#EFEBE9,stroke:#5D4037,stroke-width:2px,color:#000
+    classDef featureStyle fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#000
     
     class User userStyle
     class Orchestrator orchestratorStyle
-    class API,Splunk primaryAgentStyle
-    class CodeAnalyzer,JIRA,SNOW secondaryAgentStyle
+    class API,Splunk,CodeAnalyzer,JIRA,SNOW primaryAgentStyle
     class RAG1,RAG2,GraphSearch,SplunkQuery,JIRAMetrics,SNOWMetrics searchStyle
     class OpenSearch,GraphDB,SplunkStore,JIRAStore,SNOWStore dataStoreStyle
     class Embeddings,Chunks,GraphData dataLayerStyle
     class Parser,Chunker,Embedder,GraphBuilder etlStyle
     class LLM llmStyle
     class Response responseStyle
-    class Auth,Config securityStyle
+    class Resiliency,Memory featureStyle
 ```
 
 ### Architecture Components
@@ -214,11 +205,21 @@ flowchart TB
 - **Synthesis**: Combines results from multiple agents and search mechanisms
 - **Analysis**: Provides comprehensive reasoning across all data sources
 - **Response Generation**: Formats output for user consumption
+- **Memory Integration**: Leverages persistent agent memory for context-aware responses
 
-#### 🔐 Security & Configuration
+#### 🛡️ Agent Features
 
-- **Authentication**: AWS credentials, certificate-based auth for Azure
-- **Configuration Management**: Centralized settings and secret management
+- **Resiliency**: 
+  - Retry mechanisms with exponential backoff
+  - Circuit breaker patterns for fault tolerance
+  - Graceful degradation on failures
+  - Health checks and monitoring
+  
+- **Memory Persistence**:
+  - Conversation context retention across sessions
+  - Agent state management and recovery
+  - Long-term memory for user preferences
+  - Integration with LLM for context-aware reasoning
 
 ## Project Structure
 

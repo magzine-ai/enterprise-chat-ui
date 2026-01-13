@@ -52,7 +52,7 @@ def create_architecture_diagram(output_path: str = "architecture.png", format: s
         'etl': '#00695C',
         'llm': '#C62828',
         'response': '#E65100',
-        'security': '#5D4037',
+        'feature': '#2E7D32',
         'background': '#FAFAFA',
         'grid': '#E0E0E0'
     }
@@ -129,27 +129,27 @@ def create_architecture_diagram(output_path: str = "architecture.png", format: s
     
     # Layer 3: Primary Agents (Left)
     create_box(20, 70, 10, 3.5, 'API Discovery', colors['primary_agent'], '🔍', 'RAG Search')
-    create_box(20, 65, 10, 3.5, 'Splunk Agent', colors['primary_agent'], '📊', 'Log Analysis')
+    create_box(20, 65, 10, 3.5, 'Splunk Agent', colors['primary_agent'], 'SPL', 'Log Analysis')
     
     # Layer 3: Secondary Agents (Right)
     create_box(80, 72, 10, 3.5, 'Code Analyzer', colors['secondary_agent'], '💻', 'Code Intelligence')
-    create_box(80, 67, 10, 3.5, 'JIRA Agent', colors['secondary_agent'], '🎫', 'Issue Tracking')
-    create_box(80, 62, 10, 3.5, 'SNOW Agent', colors['secondary_agent'], '❄️', 'ITSM')
+    create_box(80, 67, 10, 3.5, 'JIRA Agent', colors['secondary_agent'], 'JIRA', 'Issue Tracking')
+    create_box(80, 62, 10, 3.5, 'SNOW Agent', colors['secondary_agent'], 'SNOW', 'ITSM')
     
     # Layer 4: Search Mechanisms (Middle)
     create_box(15, 50, 8, 3, 'RAG Search', colors['search'], '🔎', 'Semantic')
     create_box(25, 50, 8, 3, 'RAG Search', colors['search'], '🔎', 'Code Context')
     create_box(35, 50, 8, 3, 'Graph Search', colors['search'], '🕸️', 'Relationships')
-    create_box(45, 50, 8, 3, 'Splunk Query', colors['search'], '📊', 'Log Retrieval')
-    create_box(65, 50, 8, 3, 'JIRA Metrics', colors['search'], '📈', 'Issue Data')
-    create_box(75, 50, 8, 3, 'SNOW Metrics', colors['search'], '📈', 'Ticket Data')
+    create_box(45, 50, 8, 3, 'Splunk Query', colors['search'], 'SPL', 'Log Retrieval')
+    create_box(65, 50, 8, 3, 'JIRA Metrics', colors['search'], 'JIRA', 'Issue Data')
+    create_box(75, 50, 8, 3, 'SNOW Metrics', colors['search'], 'SNOW', 'Ticket Data')
     
     # Layer 5: Data Stores (Bottom)
-    create_box(10, 30, 9, 3.5, 'OpenSearch', colors['data_store'], '🔎', 'Vector + Metadata')
-    create_box(22, 30, 9, 3.5, 'Graph Database', colors['data_store'], '🕸️', 'TigerDB/NetworkX')
-    create_box(34, 30, 9, 3.5, 'Splunk', colors['data_store'], '📊', 'Logs & Metrics')
-    create_box(66, 30, 9, 3.5, 'JIRA', colors['data_store'], '🎫', 'Issues & Metrics')
-    create_box(78, 30, 9, 3.5, 'ServiceNow', colors['data_store'], '❄️', 'Tickets & Metrics')
+    create_box(10, 30, 9, 3.5, 'OpenSearch', colors['data_store'], 'OS', 'Vector + Metadata')
+    create_box(22, 30, 9, 3.5, 'TigerDB', colors['data_store'], 'TDB', 'Graph Database')
+    create_box(34, 30, 9, 3.5, 'Splunk', colors['data_store'], 'SPL', 'Logs & Metrics')
+    create_box(66, 30, 9, 3.5, 'JIRA', colors['data_store'], 'JIRA', 'Issues & Metrics')
+    create_box(78, 30, 9, 3.5, 'ServiceNow', colors['data_store'], 'SNOW', 'Tickets & Metrics')
     
     # Data Layer (Left Side)
     create_box(10, 10, 9, 3, 'Embeddings', colors['data_layer'], '📊', 'Vectors')
@@ -160,7 +160,7 @@ def create_architecture_diagram(output_path: str = "architecture.png", format: s
     create_box(10, 18, 9, 3, 'Code Parser', colors['etl'], '📝', 'AST Extraction')
     create_box(22, 18, 9, 3, 'Chunking', colors['etl'], '✂️', 'Strategy-based')
     create_box(34, 18, 9, 3, 'Embedding Gen', colors['etl'], '🧮', 'Azure/OpenAI')
-    create_box(46, 18, 9, 3, 'Graph Builder', colors['etl'], '🕸️', 'NetworkX/TigerDB')
+    create_box(46, 18, 9, 3, 'Graph Builder', colors['etl'], 'TDB', 'NetworkX/TigerDB')
     
     # LLM Reasoning (Center)
     create_box(50, 40, 14, 4, 'LLM Overall Reasoning', colors['llm'], '🤖', 'Synthesis & Analysis')
@@ -168,27 +168,27 @@ def create_architecture_diagram(output_path: str = "architecture.png", format: s
     # Response (Right of LLM)
     create_box(70, 40, 12, 4, 'Response to User', colors['response'], '💬', 'Formatted Output')
     
-    # Security (Top Right)
-    create_box(85, 90, 10, 3, 'Authentication', colors['security'], '🔑', 'AWS/Certificate')
-    create_box(85, 85, 10, 3, 'Config Manager', colors['security'], '⚙️', 'Settings & Secrets')
+    # Agent Features (Top Right)
+    create_box(85, 90, 10, 3, 'Resiliency', colors['feature'], '🔄', 'Retry & Circuit Breaker')
+    create_box(85, 85, 10, 3, 'Memory Persistence', colors['feature'], '💾', 'Context & History')
     
     # Arrows - User to Orchestrator
     create_arrow(50, 93, 50, 87, 'solid', colors['user'], 2.5)
     
-    # Orchestrator to Agents
-    create_arrow(45, 85, 25, 71.75, 'solid', colors['orchestrator'], 2)
-    create_arrow(45, 85, 25, 66.75, 'solid', colors['orchestrator'], 2)
-    create_arrow(55, 85, 75, 73.5, 'solid', colors['orchestrator'], 2, 0.6)
-    create_arrow(55, 85, 75, 68.5, 'solid', colors['orchestrator'], 2, 0.6)
-    create_arrow(55, 85, 75, 63.5, 'solid', colors['orchestrator'], 2, 0.6)
+    # Orchestrator to Agents (single layer, no path distinction)
+    create_arrow(45, 85, 25, 73.5, 'solid', colors['orchestrator'], 2)
+    create_arrow(45, 85, 25, 68.5, 'solid', colors['orchestrator'], 2)
+    create_arrow(50, 85, 55, 73.5, 'solid', colors['orchestrator'], 2)
+    create_arrow(50, 85, 55, 68.5, 'solid', colors['orchestrator'], 2)
+    create_arrow(50, 85, 55, 63.5, 'solid', colors['orchestrator'], 2)
     
     # Agents to Search
-    create_arrow(25, 68.25, 19, 51.5, 'solid', colors['primary_agent'], 2)
-    create_arrow(25, 63.25, 29, 51.5, 'solid', colors['primary_agent'], 2)
-    create_arrow(75, 70.25, 39, 51.5, 'solid', colors['secondary_agent'], 2, 0.6)
-    create_arrow(75, 70.25, 31, 51.5, 'solid', colors['secondary_agent'], 2, 0.6)
-    create_arrow(75, 65.25, 69, 51.5, 'solid', colors['secondary_agent'], 2, 0.6)
-    create_arrow(75, 60.25, 79, 51.5, 'solid', colors['secondary_agent'], 2, 0.6)
+    create_arrow(25, 70.25, 19, 51.5, 'solid', colors['primary_agent'], 2)  # API -> RAG1
+    create_arrow(25, 65.25, 49, 51.5, 'solid', colors['primary_agent'], 2)  # Splunk -> SplunkQuery
+    create_arrow(55, 70.25, 29, 51.5, 'solid', colors['primary_agent'], 2)  # CodeAnalyzer -> RAG2
+    create_arrow(55, 70.25, 39, 51.5, 'solid', colors['primary_agent'], 2)  # CodeAnalyzer -> GraphSearch
+    create_arrow(55, 65.25, 69, 51.5, 'solid', colors['primary_agent'], 2)  # JIRA -> JIRAMetrics
+    create_arrow(55, 60.25, 79, 51.5, 'solid', colors['primary_agent'], 2)  # SNOW -> SNOWMetrics
     
     # Search to Data Stores
     create_arrow(19, 48.5, 14.5, 31.75, 'solid', colors['search'], 2)
@@ -219,19 +219,27 @@ def create_architecture_diagram(output_path: str = "architecture.png", format: s
     create_arrow(38.5, 16.5, 38.5, 11.5, 'solid', colors['etl'], 2)
     
     # Data Layer to Data Stores
-    create_arrow(14.5, 11.5, 14.5, 31.75, 'solid', colors['data_layer'], 2)
-    create_arrow(26.5, 11.5, 26.5, 31.75, 'solid', colors['data_layer'], 2)
-    create_arrow(38.5, 11.5, 26.5, 31.75, 'solid', colors['data_layer'], 2)
+    create_arrow(14.5, 11.5, 14.5, 31.75, 'solid', colors['data_layer'], 2)  # Embeddings -> OpenSearch
+    create_arrow(26.5, 11.5, 26.5, 31.75, 'solid', colors['data_layer'], 2)  # Chunks -> OpenSearch
+    create_arrow(38.5, 11.5, 26.5, 31.75, 'solid', colors['data_layer'], 2)  # GraphData -> TigerDB
     
     # ETL internal flow
     create_arrow(19.5, 19.5, 22.5, 19.5, 'solid', colors['etl'], 1.5)
     create_arrow(31.5, 19.5, 34.5, 19.5, 'solid', colors['etl'], 1.5)
     create_arrow(43.5, 19.5, 46.5, 19.5, 'solid', colors['etl'], 1.5)
     
-    # Security connections (dashed, subtle)
-    create_arrow(85, 88.5, 14.5, 31.75, 'dashed', colors['security'], 1, 0.3)
-    create_arrow(85, 88.5, 26.5, 31.75, 'dashed', colors['security'], 1, 0.3)
-    create_arrow(85, 86.5, 50, 87, 'dashed', colors['security'], 1, 0.3)
+    # Agent Features connections (dashed, subtle)
+    create_arrow(85, 88.5, 25, 73.5, 'dashed', colors['feature'], 1.5, 0.4)  # Resiliency -> Agents
+    create_arrow(85, 88.5, 25, 68.5, 'dashed', colors['feature'], 1.5, 0.4)
+    create_arrow(85, 88.5, 55, 73.5, 'dashed', colors['feature'], 1.5, 0.4)
+    create_arrow(85, 88.5, 55, 68.5, 'dashed', colors['feature'], 1.5, 0.4)
+    create_arrow(85, 88.5, 55, 63.5, 'dashed', colors['feature'], 1.5, 0.4)
+    create_arrow(85, 86.5, 25, 73.5, 'dashed', colors['feature'], 1.5, 0.4)  # Memory -> Agents
+    create_arrow(85, 86.5, 25, 68.5, 'dashed', colors['feature'], 1.5, 0.4)
+    create_arrow(85, 86.5, 55, 73.5, 'dashed', colors['feature'], 1.5, 0.4)
+    create_arrow(85, 86.5, 55, 68.5, 'dashed', colors['feature'], 1.5, 0.4)
+    create_arrow(85, 86.5, 55, 63.5, 'dashed', colors['feature'], 1.5, 0.4)
+    create_arrow(85, 86.5, 57, 42, 'dashed', colors['feature'], 1.5, 0.4)  # Memory -> LLM
     
     # Add title
     title = ax.text(50, 98, 'System Architecture - ETL Pipeline & Agent Orchestration', 
