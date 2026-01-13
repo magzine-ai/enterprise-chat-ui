@@ -52,6 +52,71 @@ Output format (strict):
 
 ## System Architecture
 
+### Simple System Architecture
+
+The following diagram shows a simplified view of the core system architecture with agents, data stores, tools, and LLM integration:
+
+```mermaid
+flowchart TB
+    %% Agents Container
+    subgraph Agents["🤖 Agents"]
+        direction TB
+        APIDiscovery[🔍<br/><b>API Discovery</b>]
+        SplunkAgent[📊<br/><b>Splunk Agent</b>]
+        CodeAnalyzer[💻<br/><b>Code Analyzer</b>]
+        JIRAAgent[🎫<br/><b>JIRA</b>]
+    end
+    
+    %% Data Store Container
+    subgraph DataStore["🗄️ Data Store"]
+        direction LR
+        TigerDB[(🕸️🐅<br/><b>TigerDB</b>)]
+        VectorDB[(🔍<br/><b>VectorDB</b><br/><small>OpenSearch</small>)]
+    end
+    
+    %% Tools Container
+    subgraph Tools["🔧 Tools"]
+        direction LR
+        SplunkAPITool[📊<br/><b>Splunk API</b>]
+        JIRATool[🎫<br/><b>JIRA API</b>]
+    end
+    
+    %% Tool Connections
+    SplunkAgent -->|Query| SplunkAPITool
+    SplunkAPITool -->|Results| CodeAnalyzer
+    CodeAnalyzer -->|Text| SplunkAgent
+    
+    %% RAG Component
+    RAG[🔎<br/><b>RAG</b><br/><small>Retrieval Augmented<br/>Generation</small>]
+    
+    %% LLM Component
+    LLM[🧠<br/><b>LLM</b><br/><small>OpenAI/Claude</small>]
+    
+    %% Connections
+    VectorDB -->|Vector Search| RAG
+    SplunkAgent -->|Query| RAG
+    RAG -->|Context| LLM
+    LLM -->|Response| SplunkAgent
+    SplunkAgent -->|Query| SplunkAPI
+    SplunkAPI -->|Results| CodeAnalyzer
+    CodeAnalyzer -->|Text| SplunkAgent
+    
+    %% Styling
+    classDef agentStyle fill:#BBDEFB,stroke:#1976D2,stroke-width:2px,color:#000
+    classDef dataStoreStyle fill:#E1F5FE,stroke:#0277BD,stroke-width:2px,color:#000
+    classDef toolStyle fill:#FFF3E0,stroke:#E65100,stroke-width:2px,color:#000
+    classDef ragStyle fill:#F3E5F5,stroke:#7B1FA2,stroke-width:3px,color:#000
+    classDef llmStyle fill:#FFEBEE,stroke:#C62828,stroke-width:3px,color:#000
+    
+    class APIDiscovery,SplunkAgent,CodeAnalyzer,JIRAAgent agentStyle
+    class TigerDB,VectorDB dataStoreStyle
+    class SplunkAPI,JIRATool toolStyle
+    class RAG ragStyle
+    class LLM llmStyle
+```
+
+### Detailed System Architecture
+
 The following diagram illustrates the complete architecture of the ETL pipeline system, including data stores, agents, search mechanisms, and the overall reasoning layer:
 
 ```mermaid
@@ -67,7 +132,7 @@ flowchart TB
     subgraph Agents["🤖 Specialized Agents"]
         direction TB
         API[🔍<br/><b>API Discovery</b><br/><small>RAG Search</small>]
-        Splunk[🔍<br/><b>Splunk Agent</b><br/><small>Log Analysis</small>]
+        Splunk[📊<br/><b>Splunk Agent</b><br/><small>Log Analysis</small>]
         CodeAnalyzer[💻<br/><b>Code Analyzer</b><br/><small>Code Intelligence</small>]
         JIRA[🎫<br/><b>JIRA Agent</b><br/><small>Issue Tracking</small>]
         SNOW[❄️<br/><b>SNOW Agent</b><br/><small>ITSM</small>]
@@ -97,17 +162,17 @@ flowchart TB
     
     %% Data Stores - Bottom Layer
     subgraph DataStores["🗄️ Data Stores"]
-        direction TB
-        OpenSearch[(🔍<br/><b>OpenSearch</b><br/><small>Vector + Metadata</small>)]
-        GraphDB[(🕸️🐅<br/><b>Graph Database</b><br/><small>TigerDB/NetworkX</small>)]
-        SplunkStore[(🔍<br/><b>Splunk</b><br/><small>Logs & Metrics</small>)]
+        direction LR
+        VectorDB[(🔍<br/><b>VectorDB</b><br/><small>OpenSearch<br/>Vector + Metadata</small>)]
+        GraphDB[(🕸️🐅<br/><b>TigerDB</b><br/><small>Graph Database<br/>NetworkX</small>)]
+        SplunkStore[(📊<br/><b>Splunk</b><br/><small>Logs & Metrics</small>)]
         JIRAStore[(🎫<br/><b>JIRA</b><br/><small>Issues & Metrics</small>)]
         SNOWStore[(❄️<br/><b>ServiceNow</b><br/><small>Tickets & Metrics</small>)]
     end
     
     %% Search to Data Store Connections
-    RAG1 --> OpenSearch
-    RAG2 --> OpenSearch
+    RAG1 --> VectorDB
+    RAG2 --> VectorDB
     GraphSearch --> GraphDB
     SplunkQuery --> SplunkStore
     JIRAMetrics --> JIRAStore
@@ -140,22 +205,31 @@ flowchart TB
     GraphBuilder --> GraphData
     
     %% Data Layer to Data Stores
-    Embeddings --> OpenSearch
-    Chunks --> OpenSearch
+    Embeddings --> VectorDB
+    Chunks --> VectorDB
     GraphData --> GraphDB
     
-    %% LLM Reasoning - Center
-    subgraph ReasoningLayer["🤖 Reasoning & Synthesis"]
-        LLM[🧠<br/><b>LLM Overall Reasoning</b><br/><small>Synthesis & Analysis</small>]
-    end
+    %% RAG Component - Central
+    RAG[🔎<br/><b>RAG</b><br/><small>Retrieval Augmented<br/>Generation</small>]
     
-    %% Search Results to LLM
-    RAG1 -.->|Results| LLM
+    %% LLM Reasoning - Right
+    LLM[🧠<br/><b>LLM</b><br/><small>OpenAI/Claude<br/>Synthesis & Analysis</small>]
+    
+    %% RAG Connections
+    VectorDB -->|Vector Search| RAG
+    SplunkAgent -->|Query| RAG
+    
+    %% Search Results to RAG and LLM
+    RAG1 --> RAG
+    RAG2 --> RAG
+    RAG -->|Context| LLM
     SplunkQuery -.->|Results| LLM
-    RAG2 -.->|Results| LLM
     GraphSearch -.->|Results| LLM
     JIRAMetrics -.->|Results| LLM
     SNOWMetrics -.->|Results| LLM
+    
+    %% LLM Feedback Loop
+    LLM -->|Response| SplunkAgent
     
     %% Response Generation
     LLM --> Response[💬<br/><b>Response to User</b><br/><small>Formatted Output</small>]
@@ -182,6 +256,8 @@ flowchart TB
     classDef primaryAgentStyle fill:#BBDEFB,stroke:#1976D2,stroke-width:2px,color:#000
     classDef secondaryAgentStyle fill:#FFE0B2,stroke:#F57C00,stroke-width:2px,color:#000
     classDef searchStyle fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#000
+    classDef ragStyle fill:#F3E5F5,stroke:#7B1FA2,stroke-width:3px,color:#000
+    classDef toolStyle fill:#FFF3E0,stroke:#E65100,stroke-width:2px,color:#000
     classDef dataStoreStyle fill:#E1F5FE,stroke:#0277BD,stroke-width:2px,color:#000
     classDef dataLayerStyle fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#000
     classDef etlStyle fill:#E0F2F1,stroke:#00695C,stroke-width:2px,color:#000
@@ -193,7 +269,9 @@ flowchart TB
     class Orchestrator orchestratorStyle
     class API,Splunk,CodeAnalyzer,JIRA,SNOW primaryAgentStyle
     class RAG1,RAG2,GraphSearch,SplunkQuery,JIRAMetrics,SNOWMetrics searchStyle
-    class OpenSearch,GraphDB,SplunkStore,JIRAStore,SNOWStore dataStoreStyle
+    class RAG ragStyle
+    class SplunkAPITool,JIRATool toolStyle
+    class VectorDB,GraphDB,SplunkStore,JIRAStore,SNOWStore dataStoreStyle
     class Embeddings,Chunks,GraphData dataLayerStyle
     class Parser,Chunker,Embedder,GraphBuilder etlStyle
     class LLM llmStyle
