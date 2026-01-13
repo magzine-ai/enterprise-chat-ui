@@ -169,14 +169,13 @@ flowchart TB
 
 #### 🔍 Specialized Agents
 
-**Primary Agents:**
 - **API Discovery Agent**: Discovers and documents APIs using RAG similarity search
 - **Splunk Agent**: Generates Splunk queries and processes log/metric results
-
-**Secondary Agents:**
 - **Code Analyzer Agent**: Analyzes code using both RAG and graph search
 - **JIRA Agent**: Retrieves JIRA issues and metrics
 - **SNOW Agent**: Retrieves ServiceNow tickets and metrics
+
+**Agent Features:**
 
 #### 🗄️ Data Stores
 
