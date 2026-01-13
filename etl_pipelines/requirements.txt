@@ -75,3 +75,6 @@ pandas>=2.0.0  # Analyze chunk statistics and data quality metrics
 # 3D Graph Visualization (Optional)
 plotly>=5.18.0  # For interactive 3D graph visualization
 
+# Architecture Diagram Generation (Optional)
+matplotlib>=3.7.0  # For generating architecture diagrams as images
+

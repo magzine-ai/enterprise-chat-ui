@@ -14,51 +14,63 @@ This directory contains standalone scripts for:
 The following diagram illustrates the complete architecture of the ETL pipeline system, including data stores, agents, search mechanisms, and the overall reasoning layer:
 
 ```mermaid
-graph TB
-    %% User Interface Layer
-    User[👤 User Input] --> Orchestrator[🎯 Orchestrator Agent]
+flowchart TB
+    %% User Interface Layer - Top
+    User[👤<br/><b>User Input</b><br/><small>Query & Context</small>]
+    User -->|Query Intent| Orchestrator
     
-    %% Orchestrator Agent
-    Orchestrator -->|Primary| API[🔍 API Discovery Agent]
-    Orchestrator -->|Primary| Splunk[📊 Splunk Agent]
-    Orchestrator -->|Secondary| CodeAnalyzer[💻 Code Analyzer Agent]
-    Orchestrator -->|Secondary| JIRA[🎫 JIRA Agent]
-    Orchestrator -->|Secondary| SNOW[❄️ SNOW Agent]
+    %% Orchestrator - Central Hub
+    Orchestrator[🎯<br/><b>Orchestrator Agent</b><br/><small>Intelligent Routing</small>]
     
-    %% Data Stores Layer
+    %% Primary Agents - Left Side
+    subgraph PrimaryAgents["🔵 Primary Agents"]
+        direction TB
+        API[🔍<br/><b>API Discovery</b><br/><small>RAG Search</small>]
+        Splunk[📊<br/><b>Splunk Agent</b><br/><small>Log Analysis</small>]
+    end
+    
+    %% Secondary Agents - Right Side
+    subgraph SecondaryAgents["🟠 Secondary Agents"]
+        direction TB
+        CodeAnalyzer[💻<br/><b>Code Analyzer</b><br/><small>Code Intelligence</small>]
+        JIRA[🎫<br/><b>JIRA Agent</b><br/><small>Issue Tracking</small>]
+        SNOW[❄️<br/><b>SNOW Agent</b><br/><small>ITSM</small>]
+    end
+    
+    %% Orchestrator Routes
+    Orchestrator -->|Primary Path| PrimaryAgents
+    Orchestrator -->|Secondary Path| SecondaryAgents
+    
+    %% Search Mechanisms
+    subgraph SearchLayer["🔍 Search & Retrieval Layer"]
+        direction LR
+        RAG1[🔎<br/><b>RAG Search</b><br/><small>Semantic Similarity</small>]
+        RAG2[🔎<br/><b>RAG Search</b><br/><small>Code Context</small>]
+        GraphSearch[🕸️<br/><b>Graph Search</b><br/><small>Relationships</small>]
+        SplunkQuery[📊<br/><b>Splunk Query</b><br/><small>Log Retrieval</small>]
+        JIRAMetrics[📈<br/><b>JIRA Metrics</b><br/><small>Issue Data</small>]
+        SNOWMetrics[📈<br/><b>SNOW Metrics</b><br/><small>Ticket Data</small>]
+    end
+    
+    %% Agent to Search Connections
+    API --> RAG1
+    Splunk --> SplunkQuery
+    CodeAnalyzer --> RAG2
+    CodeAnalyzer --> GraphSearch
+    JIRA --> JIRAMetrics
+    SNOW --> SNOWMetrics
+    
+    %% Data Stores - Bottom Layer
     subgraph DataStores["🗄️ Data Stores"]
-        OpenSearch[(🔎 OpenSearch<br/>Vector + Metadata)]
-        GraphDB[(🕸️ Graph Database<br/>TigerDB/NetworkX)]
-        SplunkStore[(📊 Splunk<br/>Logs & Metrics)]
-        JIRAStore[(🎫 JIRA<br/>Issues & Metrics)]
-        SNOWStore[(❄️ ServiceNow<br/>Tickets & Metrics)]
+        direction TB
+        OpenSearch[(🔎<br/><b>OpenSearch</b><br/><small>Vector + Metadata</small>)]
+        GraphDB[(🕸️<br/><b>Graph Database</b><br/><small>TigerDB/NetworkX</small>)]
+        SplunkStore[(📊<br/><b>Splunk</b><br/><small>Logs & Metrics</small>)]
+        JIRAStore[(🎫<br/><b>JIRA</b><br/><small>Issues & Metrics</small>)]
+        SNOWStore[(❄️<br/><b>ServiceNow</b><br/><small>Tickets & Metrics</small>)]
     end
     
-    %% Data Layer
-    subgraph DataLayer["📦 Data Layer"]
-        Embeddings[📊 Embeddings<br/>Vector Representations]
-        Chunks[📄 Code Chunks<br/>Methods, Classes, Files]
-        GraphData[🕸️ Graph Data<br/>Relationships & Entities]
-        ConfigData[⚙️ Configuration<br/>Settings & Metadata]
-    end
-    
-    %% ETL Pipeline Layer
-    subgraph ETLPipeline["🔄 ETL Pipeline"]
-        Parser[📝 Code Parser<br/>AST Extraction]
-        Chunker[✂️ Chunking Engine<br/>Strategy-based]
-        Embedder[🧮 Embedding Generator<br/>Azure/OpenAI]
-        GraphBuilder[🕸️ Graph Builder<br/>NetworkX/TigerDB]
-    end
-    
-    %% Agent Processing
-    API --> RAG1[🔍 RAG Similarity Search]
-    Splunk --> SplunkQuery[📊 Splunk Query Generation<br/>Result Population]
-    CodeAnalyzer --> RAG2[🔍 RAG Similarity Search]
-    CodeAnalyzer --> GraphSearch[🕸️ Graph Search<br/>Relationship Traversal]
-    JIRA --> JIRAMetrics[📈 JIRA Metric Search Results]
-    SNOW --> SNOWMetrics[📈 SNOW Metric Search Results]
-    
-    %% Data Store Connections
+    %% Search to Data Store Connections
     RAG1 --> OpenSearch
     RAG2 --> OpenSearch
     GraphSearch --> GraphDB
@@ -66,59 +78,95 @@ graph TB
     JIRAMetrics --> JIRAStore
     SNOWMetrics --> SNOWStore
     
-    %% ETL to Data Stores
-    Parser --> Chunks
-    Chunker --> Chunks
+    %% Data Layer - Processing
+    subgraph DataLayer["📦 Data Processing Layer"]
+        direction LR
+        Embeddings[📊<br/><b>Embeddings</b><br/><small>Vector Representations</small>]
+        Chunks[📄<br/><b>Code Chunks</b><br/><small>Methods, Classes</small>]
+        GraphData[🕸️<br/><b>Graph Data</b><br/><small>Relationships</small>]
+    end
+    
+    %% ETL Pipeline - Left Side
+    subgraph ETLPipeline["🔄 ETL Pipeline"]
+        direction TB
+        Parser[📝<br/><b>Code Parser</b><br/><small>AST Extraction</small>]
+        Chunker[✂️<br/><b>Chunking Engine</b><br/><small>Strategy-based</small>]
+        Embedder[🧮<br/><b>Embedding Generator</b><br/><small>Azure/OpenAI</small>]
+        GraphBuilder[🕸️<br/><b>Graph Builder</b><br/><small>NetworkX/TigerDB</small>]
+        
+        Parser --> Chunker
+        Chunker --> Embedder
+        Chunker --> GraphBuilder
+    end
+    
+    %% ETL to Data Layer
     Embedder --> Embeddings
+    Chunker --> Chunks
     GraphBuilder --> GraphData
     
-    Chunks --> OpenSearch
+    %% Data Layer to Data Stores
     Embeddings --> OpenSearch
+    Chunks --> OpenSearch
     GraphData --> GraphDB
     
-    %% LLM Reasoning Layer
-    RAG1 --> LLM[🤖 LLM Overall Reasoning<br/>Synthesis & Analysis]
-    SplunkQuery --> LLM
-    RAG2 --> LLM
-    GraphSearch --> LLM
-    JIRAMetrics --> LLM
-    SNOWMetrics --> LLM
+    %% LLM Reasoning - Center
+    subgraph ReasoningLayer["🤖 Reasoning & Synthesis"]
+        LLM[🧠<br/><b>LLM Overall Reasoning</b><br/><small>Synthesis & Analysis</small>]
+    end
+    
+    %% Search Results to LLM
+    RAG1 -.->|Results| LLM
+    SplunkQuery -.->|Results| LLM
+    RAG2 -.->|Results| LLM
+    GraphSearch -.->|Results| LLM
+    JIRAMetrics -.->|Results| LLM
+    SNOWMetrics -.->|Results| LLM
     
     %% Response Generation
-    LLM --> Response[💬 Response to User<br/>Formatted Output]
+    LLM --> Response[💬<br/><b>Response to User</b><br/><small>Formatted Output</small>]
     
     %% Context Feedback Loop
     Response -.->|Context Shared| Orchestrator
     Response -.->|Memory| LLM
     
-    %% Authentication & Configuration
+    %% Security & Configuration - Top Right
     subgraph Security["🔐 Security & Configuration"]
-        Auth[🔑 Authentication<br/>AWS/Certificate-based]
-        Config[⚙️ Config Manager<br/>Settings & Secrets]
+        direction TB
+        Auth[🔑<br/><b>Authentication</b><br/><small>AWS/Certificate</small>]
+        Config[⚙️<br/><b>Config Manager</b><br/><small>Settings & Secrets</small>]
     end
     
-    Auth --> OpenSearch
-    Auth --> GraphDB
-    Auth --> SplunkStore
-    Config --> Orchestrator
-    Config --> ETLPipeline
+    %% Security Connections
+    Auth -.->|Secures| OpenSearch
+    Auth -.->|Secures| GraphDB
+    Auth -.->|Secures| SplunkStore
+    Config -.->|Configures| Orchestrator
+    Config -.->|Configures| ETLPipeline
     
-    %% Styling
-    classDef primaryAgent fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
-    classDef secondaryAgent fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
-    classDef dataStore fill:#2196F3,stroke:#0D47A1,stroke-width:2px,color:#fff
-    classDef dataLayer fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
-    classDef etlLayer fill:#00BCD4,stroke:#006064,stroke-width:2px,color:#fff
-    classDef llmLayer fill:#F44336,stroke:#B71C1C,stroke-width:2px,color:#fff
-    classDef securityLayer fill:#795548,stroke:#3E2723,stroke-width:2px,color:#fff
+    %% Styling with better colors and UX
+    classDef userStyle fill:#E3F2FD,stroke:#1976D2,stroke-width:3px,color:#000
+    classDef orchestratorStyle fill:#C8E6C9,stroke:#388E3C,stroke-width:3px,color:#000
+    classDef primaryAgentStyle fill:#BBDEFB,stroke:#1976D2,stroke-width:2px,color:#000
+    classDef secondaryAgentStyle fill:#FFE0B2,stroke:#F57C00,stroke-width:2px,color:#000
+    classDef searchStyle fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#000
+    classDef dataStoreStyle fill:#E1F5FE,stroke:#0277BD,stroke-width:2px,color:#000
+    classDef dataLayerStyle fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#000
+    classDef etlStyle fill:#E0F2F1,stroke:#00695C,stroke-width:2px,color:#000
+    classDef llmStyle fill:#FFEBEE,stroke:#C62828,stroke-width:3px,color:#000
+    classDef responseStyle fill:#FFF3E0,stroke:#E65100,stroke-width:3px,color:#000
+    classDef securityStyle fill:#EFEBE9,stroke:#5D4037,stroke-width:2px,color:#000
     
-    class API,Splunk primaryAgent
-    class CodeAnalyzer,JIRA,SNOW secondaryAgent
-    class OpenSearch,GraphDB,SplunkStore,JIRAStore,SNOWStore dataStore
-    class Embeddings,Chunks,GraphData,ConfigData dataLayer
-    class Parser,Chunker,Embedder,GraphBuilder etlLayer
-    class LLM,Response llmLayer
-    class Auth,Config securityLayer
+    class User userStyle
+    class Orchestrator orchestratorStyle
+    class API,Splunk primaryAgentStyle
+    class CodeAnalyzer,JIRA,SNOW secondaryAgentStyle
+    class RAG1,RAG2,GraphSearch,SplunkQuery,JIRAMetrics,SNOWMetrics searchStyle
+    class OpenSearch,GraphDB,SplunkStore,JIRAStore,SNOWStore dataStoreStyle
+    class Embeddings,Chunks,GraphData dataLayerStyle
+    class Parser,Chunker,Embedder,GraphBuilder etlStyle
+    class LLM llmStyle
+    class Response responseStyle
+    class Auth,Config securityStyle
 ```
 
 ### Architecture Components
@@ -184,7 +232,8 @@ etl_pipelines/
     ├── __init__.py
     ├── standalone_build_repo_independent.py      # Repository indexing
     ├── standalone_query_to_html_independent.py   # Query & HTML reports
-    └── visualize_graph_3d.py                     # 3D graph visualization
+    ├── visualize_graph_3d.py                     # 3D graph visualization
+    └── generate_architecture_diagram.py          # Architecture diagram generator
 ```
 
 ## Scripts
@@ -257,6 +306,47 @@ python visualize_graph_3d.py \
 - `--layout-iterations` - Layout calculation iterations (default: 50)
 - `--create-sample` - Create a sample graph for testing
 - `--sample-file` - Sample graph file path (default: `sample_graph.pkl`)
+
+### 4. `generate_architecture_diagram.py`
+
+**Purpose**: Generate a high-quality visual architecture diagram as an image file.
+
+**Features**:
+- Professional architecture diagram with icons and color coding
+- High-resolution output (PNG, SVG, PDF formats)
+- Modern, accessible color palette
+- Clear visual hierarchy and flow
+- Legend and labels for easy understanding
+- Customizable output format and resolution
+
+**Usage**:
+
+```bash
+# Generate PNG image (default, 300 DPI)
+python generate_architecture_diagram.py --output architecture.png
+
+# Generate high-resolution PNG
+python generate_architecture_diagram.py --output architecture.png --dpi 600
+
+# Generate SVG (vector format, scalable)
+python generate_architecture_diagram.py --output architecture.svg --format svg
+
+# Generate PDF (for documentation)
+python generate_architecture_diagram.py --output architecture.pdf --format pdf
+
+# Display the diagram after generation
+python generate_architecture_diagram.py --output architecture.png --show
+```
+
+**Arguments**:
+- `--output` - Output file path (default: `architecture.png`)
+- `--format` - Output format: `png`, `svg`, or `pdf` (default: `png`)
+- `--dpi` - Resolution for raster formats (default: 300)
+- `--show` - Display the diagram after generation
+
+**Requirements**:
+- `matplotlib` - For diagram generation
+- Optional: `networkx` - For advanced layout algorithms
 
 **3D Visualization in Build Script**:
 
