@@ -2,7 +2,7 @@
 Generate a visually appealing architecture diagram as an image.
 
 This script creates a high-quality visual representation of the system architecture
-using matplotlib and networkx for better UX and visual appeal.
+using matplotlib for better UX and visual appeal with neatly organized arrows.
 
 Usage:
     python generate_architecture_diagram.py --output architecture.png
@@ -12,7 +12,7 @@ Usage:
 import argparse
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Circle, Rectangle
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Circle, Rectangle, Ellipse
 import matplotlib.patheffects as path_effects
 from matplotlib import font_manager
 import numpy as np
@@ -35,228 +35,253 @@ def create_architecture_diagram(output_path: str = "architecture.png", format: s
         dpi: Resolution for raster formats
     """
     # Create figure with high DPI for quality
-    fig, ax = plt.subplots(1, 1, figsize=(20, 14), facecolor='#FAFAFA')
+    fig, ax = plt.subplots(1, 1, figsize=(24, 16), facecolor='#FAFAFA')
     ax.set_xlim(0, 100)
     ax.set_ylim(0, 100)
     ax.axis('off')
     
     # Color palette - modern, accessible colors
     colors = {
-        'user': '#1976D2',
+        'ui': '#1976D2',
+        'backend': '#7B1FA2',
         'orchestrator': '#388E3C',
-        'primary_agent': '#1976D2',
-        'secondary_agent': '#F57C00',
-        'search': '#7B1FA2',
-        'data_store': '#0277BD',
-        'data_layer': '#C2185B',
-        'etl': '#00695C',
+        'agent': '#1976D2',
+        'rag': '#7B1FA2',
         'llm': '#C62828',
-        'response': '#E65100',
-        'feature': '#2E7D32',
+        'data_store': '#0277BD',
+        'external_data': '#F57C00',
+        'tool': '#E65100',
+        'etl': '#00695C',
         'background': '#FAFAFA',
-        'grid': '#E0E0E0'
+        'arrow': '#424242',
+        'arrow_highlight': '#1976D2'
     }
     
-    # Helper function to create rounded rectangle boxes
-    def create_box(x, y, width, height, label, color, icon='', subtext=''):
+    # Helper function to create rounded rectangle boxes with icons
+    def create_box(x, y, width, height, label, color, icon='', subtext='', icon_size=16):
         """Create a styled box with icon and text."""
-        # Main box
+        # Main box with rounded corners
         box = FancyBboxPatch(
             (x - width/2, y - height/2), width, height,
-            boxstyle="round,pad=0.5", 
+            boxstyle="round,pad=0.6", 
             facecolor=color,
             edgecolor='white',
             linewidth=2.5,
-            zorder=2
+            zorder=2,
+            alpha=0.95
         )
         ax.add_patch(box)
         
         # Add shadow effect
         shadow = FancyBboxPatch(
-            (x - width/2 + 0.3, y - height/2 - 0.3), width, height,
-            boxstyle="round,pad=0.5",
+            (x - width/2 + 0.4, y - height/2 - 0.4), width, height,
+            boxstyle="round,pad=0.6",
             facecolor='black',
-            alpha=0.1,
+            alpha=0.15,
             zorder=1
         )
         ax.add_patch(shadow)
         
-        # Add icon (with fallback for unsupported emojis)
+        # Add icon (text-based for tools)
         if icon:
-            try:
-                ax.text(x, y + height/4, icon, fontsize=24, ha='center', va='center', zorder=3)
-            except Exception:
-                # Fallback: use first character or symbol
-                icon_fallback = icon[0] if icon else ''
-                ax.text(x, y + height/4, icon_fallback, fontsize=20, ha='center', va='center', zorder=3, weight='bold')
+            ax.text(x, y + height/3.5, icon, fontsize=icon_size, ha='center', va='center', 
+                   zorder=3, weight='bold', color='white')
         
         # Add main label
-        text = ax.text(x, y, label, fontsize=11, ha='center', va='center', 
+        text = ax.text(x, y, label, fontsize=10, ha='center', va='center', 
                       weight='bold', zorder=3, color='white')
-        text.set_path_effects([path_effects.withStroke(linewidth=3, foreground='black', alpha=0.3)])
+        text.set_path_effects([path_effects.withStroke(linewidth=4, foreground='black', alpha=0.4)])
         
         # Add subtext
         if subtext:
-            ax.text(x, y - height/4, subtext, fontsize=8, ha='center', va='center',
-                   zorder=3, color='white', alpha=0.9)
+            ax.text(x, y - height/3.5, subtext, fontsize=7, ha='center', va='center',
+                   zorder=3, color='white', alpha=0.95, wrap=True)
         
         return box
     
-    # Helper function to create arrows
-    def create_arrow(x1, y1, x2, y2, style='solid', color='#666', width=1.5, alpha=0.7):
-        """Create a styled arrow."""
+    # Helper function to create arrows with better styling
+    def create_arrow(x1, y1, x2, y2, style='solid', color='#666', width=2, alpha=0.8, label='', label_offset=0):
+        """Create a styled arrow with optional label."""
+        # Calculate arrow path with slight curve for better visual appeal
+        mid_x = (x1 + x2) / 2
+        mid_y = (y1 + y2) / 2
+        
+        # Add slight curve for longer arrows
+        if abs(x2 - x1) > 10 or abs(y2 - y1) > 10:
+            # Bezier-like curve
+            control_x = mid_x + (y2 - y1) * 0.1
+            control_y = mid_y - (x2 - x1) * 0.1
+            path = [(x1, y1), (control_x, control_y), (x2, y2)]
+        else:
+            path = [(x1, y1), (x2, y2)]
+        
         if style == 'solid':
             arrow = FancyArrowPatch(
                 (x1, y1), (x2, y2),
-                arrowstyle='->', mutation_scale=20,
-                color=color, linewidth=width, alpha=alpha, zorder=1
+                arrowstyle='->', mutation_scale=25,
+                color=color, linewidth=width, alpha=alpha, zorder=1,
+                connectionstyle='arc3,rad=0.1' if abs(x2 - x1) > 10 else 'arc3,rad=0'
             )
         else:  # dashed
             arrow = FancyArrowPatch(
                 (x1, y1), (x2, y2),
-                arrowstyle='->', mutation_scale=20,
+                arrowstyle='->', mutation_scale=25,
                 color=color, linewidth=width, alpha=alpha, 
-                linestyle='--', zorder=1
+                linestyle='--', zorder=1,
+                connectionstyle='arc3,rad=0.1' if abs(x2 - x1) > 10 else 'arc3,rad=0'
             )
         ax.add_patch(arrow)
+        
+        # Add label if provided
+        if label:
+            label_x = mid_x + label_offset
+            label_y = mid_y + label_offset
+            ax.text(label_x, label_y, label, fontsize=7, ha='center', va='center',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor=color),
+                   zorder=4, color=color, weight='bold')
+        
         return arrow
     
-    # Layer 1: User Input (Top Center)
-    create_box(50, 95, 12, 4, 'User Input', colors['user'], '👤', 'Query & Context')
+    # ========== LAYER 1: UI LAYER (Top) ==========
+    create_box(50, 95, 14, 3.5, 'React UI', colors['ui'], '⚛️', 'Chat Interface • WebSocket • Activity Indicators', 18)
     
-    # Layer 2: Orchestrator (Below User)
-    create_box(50, 85, 14, 4, 'Orchestrator Agent', colors['orchestrator'], '🎯', 'Intelligent Routing')
+    # ========== LAYER 2: BACKEND LAYER ==========
+    create_box(30, 85, 12, 3.5, 'FastAPI', colors['backend'], '🚀', 'REST API • WebSocket • Jobs', 16)
+    create_box(70, 85, 12, 3.5, 'Orchestrator', colors['orchestrator'], '🎯', 'Agent Routing • Workflow', 16)
     
-    # Layer 3: Primary Agents (Left)
-    create_box(20, 70, 10, 3.5, 'API Discovery', colors['primary_agent'], '🔍', 'RAG Search')
-    create_box(20, 65, 10, 3.5, 'Splunk Agent', colors['primary_agent'], 'SPL', 'Log Analysis')
+    # ========== LAYER 3: AGENTS ==========
+    create_box(15, 72, 10, 3, 'API Discovery', colors['agent'], '🔍', 'RAG Search')
+    create_box(15, 67, 10, 3, 'Splunk Agent', colors['agent'], 'SPL', 'Log Analysis')
+    create_box(50, 72, 10, 3, 'Code Analyzer', colors['agent'], '💻', 'Code Intelligence')
+    create_box(50, 67, 10, 3, 'JIRA Agent', colors['agent'], 'JIRA', 'Issue Tracking')
+    create_box(50, 62, 10, 3, 'SNOW Agent', colors['agent'], 'SNOW', 'ITSM')
     
-    # Layer 3: Secondary Agents (Right)
-    create_box(80, 72, 10, 3.5, 'Code Analyzer', colors['secondary_agent'], '💻', 'Code Intelligence')
-    create_box(80, 67, 10, 3.5, 'JIRA Agent', colors['secondary_agent'], 'JIRA', 'Issue Tracking')
-    create_box(80, 62, 10, 3.5, 'SNOW Agent', colors['secondary_agent'], 'SNOW', 'ITSM')
+    # ========== LAYER 4: RAG & LLM ==========
+    create_box(35, 50, 12, 4, 'RAG', colors['rag'], '🔎', 'Retrieval Augmented\nGeneration', 18)
+    create_box(70, 50, 12, 4, 'LLM', colors['llm'], '🧠', 'OpenAI/Claude\nSynthesis & Analysis', 18)
     
-    # Layer 4: Search Mechanisms (Middle)
-    create_box(15, 50, 8, 3, 'RAG Search', colors['search'], '🔎', 'Semantic')
-    create_box(25, 50, 8, 3, 'RAG Search', colors['search'], '🔎', 'Code Context')
-    create_box(35, 50, 8, 3, 'Graph Search', colors['search'], '🕸️', 'Relationships')
-    create_box(45, 50, 8, 3, 'Splunk Query', colors['search'], 'SPL', 'Log Retrieval')
-    create_box(65, 50, 8, 3, 'JIRA Metrics', colors['search'], 'JIRA', 'Issue Data')
-    create_box(75, 50, 8, 3, 'SNOW Metrics', colors['search'], 'SNOW', 'Ticket Data')
+    # ========== LAYER 5: DATA STORES ==========
+    create_box(10, 30, 10, 3.5, 'VectorDB', colors['data_store'], '🔍', 'OpenSearch\nVector + Metadata')
+    create_box(25, 30, 10, 3.5, 'TigerDB', colors['data_store'], 'TDB', 'Graph Database\nNetworkX')
+    create_box(40, 30, 10, 3.5, 'Aurora', colors['data_store'], 'AURORA', 'AWS Aurora\nPostgreSQL')
     
-    # Layer 5: Data Stores (Bottom)
-    create_box(10, 30, 9, 3.5, 'OpenSearch', colors['data_store'], 'OS', 'Vector + Metadata')
-    create_box(22, 30, 9, 3.5, 'TigerDB', colors['data_store'], 'TDB', 'Graph Database')
-    create_box(34, 30, 9, 3.5, 'Splunk', colors['data_store'], 'SPL', 'Logs & Metrics')
-    create_box(66, 30, 9, 3.5, 'JIRA', colors['data_store'], 'JIRA', 'Issues & Metrics')
-    create_box(78, 30, 9, 3.5, 'ServiceNow', colors['data_store'], 'SNOW', 'Tickets & Metrics')
+    # ========== LAYER 6: EXTERNAL DATA SOURCES ==========
+    create_box(60, 30, 10, 3.5, 'Splunk', colors['external_data'], 'SPL', 'Logs & Metrics')
+    create_box(75, 30, 10, 3.5, 'JIRA', colors['external_data'], 'JIRA', 'Issues & Metrics')
+    create_box(90, 30, 10, 3.5, 'ServiceNow', colors['external_data'], 'SNOW', 'Tickets & Metrics')
     
-    # Data Layer (Left Side)
-    create_box(10, 10, 9, 3, 'Embeddings', colors['data_layer'], '📊', 'Vectors')
-    create_box(22, 10, 9, 3, 'Code Chunks', colors['data_layer'], '📄', 'Methods, Classes')
-    create_box(34, 10, 9, 3, 'Graph Data', colors['data_layer'], '🕸️', 'Relationships')
+    # ========== LAYER 7: TOOLS ==========
+    create_box(60, 15, 10, 3, 'Splunk API', colors['tool'], 'SPL', 'External API')
+    create_box(75, 15, 10, 3, 'JIRA API', colors['tool'], 'JIRA', 'External API')
+    create_box(90, 15, 10, 3, 'SNOW API', colors['tool'], 'SNOW', 'External API')
     
-    # ETL Pipeline (Left Side, Middle)
-    create_box(10, 18, 9, 3, 'Code Parser', colors['etl'], '📝', 'AST Extraction')
-    create_box(22, 18, 9, 3, 'Chunking', colors['etl'], '✂️', 'Strategy-based')
-    create_box(34, 18, 9, 3, 'Embedding Gen', colors['etl'], '🧮', 'Azure/OpenAI')
-    create_box(46, 18, 9, 3, 'Graph Builder', colors['etl'], 'TDB', 'NetworkX/TigerDB')
+    # ========== LAYER 8: ETL PIPELINE (Left Side) ==========
+    create_box(10, 15, 9, 3, 'Code Parser', colors['etl'], '📝', 'AST Extraction')
+    create_box(22, 15, 9, 3, 'Chunking', colors['etl'], '✂️', 'Strategy-based')
+    create_box(34, 15, 9, 3, 'Embedding', colors['etl'], '🧮', 'Azure/OpenAI')
+    create_box(46, 15, 9, 3, 'Graph Builder', colors['etl'], 'TDB', 'NetworkX/TigerDB')
     
-    # LLM Reasoning (Center)
-    create_box(50, 40, 14, 4, 'LLM Overall Reasoning', colors['llm'], '🤖', 'Synthesis & Analysis')
+    # ========== ARROWS - UI to Backend ==========
+    create_arrow(50, 93.25, 36, 86.75, 'solid', colors['arrow_highlight'], 3, 0.9, 'HTTP/WS')
+    create_arrow(36, 85.25, 50, 93.25, 'solid', colors['arrow_highlight'], 3, 0.9, 'WebSocket')
     
-    # Response (Right of LLM)
-    create_box(70, 40, 12, 4, 'Response to User', colors['response'], '💬', 'Formatted Output')
+    # ========== ARROWS - Backend to Orchestrator ==========
+    create_arrow(36, 85.25, 64, 86.75, 'solid', colors['backend'], 2.5, 0.8)
     
-    # Agent Features (Top Right)
-    create_box(85, 90, 10, 3, 'Resiliency', colors['feature'], '🔄', 'Retry & Circuit Breaker')
-    create_box(85, 85, 10, 3, 'Memory Persistence', colors['feature'], '💾', 'Context & History')
+    # ========== ARROWS - Orchestrator to Agents ==========
+    create_arrow(64, 85.25, 20, 73.5, 'solid', colors['orchestrator'], 2.5, 0.8)
+    create_arrow(64, 85.25, 20, 68.5, 'solid', colors['orchestrator'], 2.5, 0.8)
+    create_arrow(64, 85.25, 55, 73.5, 'solid', colors['orchestrator'], 2.5, 0.8)
+    create_arrow(64, 85.25, 55, 68.5, 'solid', colors['orchestrator'], 2.5, 0.8)
+    create_arrow(64, 85.25, 55, 63.5, 'solid', colors['orchestrator'], 2.5, 0.8)
     
-    # Arrows - User to Orchestrator
-    create_arrow(50, 93, 50, 87, 'solid', colors['user'], 2.5)
+    # ========== ARROWS - Agents to RAG ==========
+    create_arrow(20, 70.5, 29, 52, 'solid', colors['agent'], 2, 0.7, 'Query')
+    create_arrow(55, 70.5, 29, 52, 'solid', colors['agent'], 2, 0.7, 'Query')
     
-    # Orchestrator to Agents (single layer, no path distinction)
-    create_arrow(45, 85, 25, 73.5, 'solid', colors['orchestrator'], 2)
-    create_arrow(45, 85, 25, 68.5, 'solid', colors['orchestrator'], 2)
-    create_arrow(50, 85, 55, 73.5, 'solid', colors['orchestrator'], 2)
-    create_arrow(50, 85, 55, 68.5, 'solid', colors['orchestrator'], 2)
-    create_arrow(50, 85, 55, 63.5, 'solid', colors['orchestrator'], 2)
+    # ========== ARROWS - Data Stores to RAG ==========
+    create_arrow(15, 31.75, 29, 48, 'solid', colors['data_store'], 2.5, 0.8, 'Vector Search')
+    create_arrow(30, 31.75, 29, 48, 'solid', colors['data_store'], 2, 0.7, 'Graph Query')
     
-    # Agents to Search
-    create_arrow(25, 70.25, 19, 51.5, 'solid', colors['primary_agent'], 2)  # API -> RAG1
-    create_arrow(25, 65.25, 49, 51.5, 'solid', colors['primary_agent'], 2)  # Splunk -> SplunkQuery
-    create_arrow(55, 70.25, 29, 51.5, 'solid', colors['primary_agent'], 2)  # CodeAnalyzer -> RAG2
-    create_arrow(55, 70.25, 39, 51.5, 'solid', colors['primary_agent'], 2)  # CodeAnalyzer -> GraphSearch
-    create_arrow(55, 65.25, 69, 51.5, 'solid', colors['primary_agent'], 2)  # JIRA -> JIRAMetrics
-    create_arrow(55, 60.25, 79, 51.5, 'solid', colors['primary_agent'], 2)  # SNOW -> SNOWMetrics
+    # ========== ARROWS - RAG to LLM ==========
+    create_arrow(41, 50, 64, 52, 'solid', colors['rag'], 3, 0.9, 'Context')
     
-    # Search to Data Stores
-    create_arrow(19, 48.5, 14.5, 31.75, 'solid', colors['search'], 2)
-    create_arrow(29, 48.5, 14.5, 31.75, 'solid', colors['search'], 2)
-    create_arrow(39, 48.5, 26.5, 31.75, 'solid', colors['search'], 2)
-    create_arrow(49, 48.5, 38.5, 31.75, 'solid', colors['search'], 2)
-    create_arrow(69, 48.5, 70.5, 31.75, 'solid', colors['search'], 2, 0.6)
-    create_arrow(79, 48.5, 82.5, 31.75, 'solid', colors['search'], 2, 0.6)
+    # ========== ARROWS - LLM to Agents ==========
+    create_arrow(76, 50, 20, 68.5, 'solid', colors['llm'], 2.5, 0.8, 'Response')
     
-    # Search to LLM (dashed)
-    create_arrow(19, 50, 43, 42, 'dashed', colors['search'], 1.5, 0.5)
-    create_arrow(29, 50, 43, 42, 'dashed', colors['search'], 1.5, 0.5)
-    create_arrow(39, 50, 43, 42, 'dashed', colors['search'], 1.5, 0.5)
-    create_arrow(49, 50, 43, 42, 'dashed', colors['search'], 1.5, 0.5)
-    create_arrow(69, 50, 57, 42, 'dashed', colors['search'], 1.5, 0.4)
-    create_arrow(79, 50, 57, 42, 'dashed', colors['search'], 1.5, 0.4)
+    # ========== ARROWS - Agents to External Tools ==========
+    create_arrow(20, 65.5, 65, 31.75, 'solid', colors['tool'], 2, 0.7, 'Query')
+    create_arrow(55, 65.5, 80, 31.75, 'solid', colors['tool'], 2, 0.7, 'Query')
+    create_arrow(55, 60.5, 95, 31.75, 'solid', colors['tool'], 2, 0.7, 'Query')
     
-    # LLM to Response
-    create_arrow(64, 40, 64, 40, 'solid', colors['llm'], 3)
+    # ========== ARROWS - Agents to Tool APIs ==========
+    create_arrow(20, 65.5, 65, 16.5, 'solid', colors['tool'], 2, 0.7)
+    create_arrow(55, 65.5, 80, 16.5, 'solid', colors['tool'], 2, 0.7)
+    create_arrow(55, 60.5, 95, 16.5, 'solid', colors['tool'], 2, 0.7)
     
-    # Response feedback loop (dashed)
-    create_arrow(70, 38, 55, 85, 'dashed', colors['response'], 2, 0.4)
-    create_arrow(70, 40, 57, 42, 'dashed', colors['response'], 2, 0.4)
+    # ========== ARROWS - Tool APIs to External Data ==========
+    create_arrow(65, 13.5, 65, 28.25, 'solid', colors['tool'], 2, 0.6)
+    create_arrow(80, 13.5, 80, 28.25, 'solid', colors['tool'], 2, 0.6)
+    create_arrow(95, 13.5, 95, 28.25, 'solid', colors['tool'], 2, 0.6)
     
-    # ETL to Data Layer
-    create_arrow(14.5, 16.5, 14.5, 11.5, 'solid', colors['etl'], 2)
-    create_arrow(26.5, 16.5, 26.5, 11.5, 'solid', colors['etl'], 2)
-    create_arrow(38.5, 16.5, 38.5, 11.5, 'solid', colors['etl'], 2)
+    # ========== ARROWS - Tool Results to Code Analyzer ==========
+    create_arrow(65, 16.5, 50, 70.5, 'solid', colors['tool'], 2, 0.7, 'Results')
     
-    # Data Layer to Data Stores
-    create_arrow(14.5, 11.5, 14.5, 31.75, 'solid', colors['data_layer'], 2)  # Embeddings -> OpenSearch
-    create_arrow(26.5, 11.5, 26.5, 31.75, 'solid', colors['data_layer'], 2)  # Chunks -> OpenSearch
-    create_arrow(38.5, 11.5, 26.5, 31.75, 'solid', colors['data_layer'], 2)  # GraphData -> TigerDB
+    # ========== ARROWS - Backend to Data Stores ==========
+    create_arrow(36, 83.25, 15, 31.75, 'dashed', colors['data_store'], 2, 0.6, 'Query')
+    create_arrow(36, 83.25, 30, 31.75, 'dashed', colors['data_store'], 2, 0.6, 'Query')
+    create_arrow(36, 83.25, 45, 31.75, 'solid', colors['data_store'], 2.5, 0.8, 'Read/Write')
     
-    # ETL internal flow
-    create_arrow(19.5, 19.5, 22.5, 19.5, 'solid', colors['etl'], 1.5)
-    create_arrow(31.5, 19.5, 34.5, 19.5, 'solid', colors['etl'], 1.5)
-    create_arrow(43.5, 19.5, 46.5, 19.5, 'solid', colors['etl'], 1.5)
+    # ========== ARROWS - LLM Response to Backend ==========
+    create_arrow(76, 48, 36, 86.75, 'solid', colors['llm'], 2.5, 0.8, 'Response')
     
-    # Agent Features connections (dashed, subtle)
-    create_arrow(85, 88.5, 25, 73.5, 'dashed', colors['feature'], 1.5, 0.4)  # Resiliency -> Agents
-    create_arrow(85, 88.5, 25, 68.5, 'dashed', colors['feature'], 1.5, 0.4)
-    create_arrow(85, 88.5, 55, 73.5, 'dashed', colors['feature'], 1.5, 0.4)
-    create_arrow(85, 88.5, 55, 68.5, 'dashed', colors['feature'], 1.5, 0.4)
-    create_arrow(85, 88.5, 55, 63.5, 'dashed', colors['feature'], 1.5, 0.4)
-    create_arrow(85, 86.5, 25, 73.5, 'dashed', colors['feature'], 1.5, 0.4)  # Memory -> Agents
-    create_arrow(85, 86.5, 25, 68.5, 'dashed', colors['feature'], 1.5, 0.4)
-    create_arrow(85, 86.5, 55, 73.5, 'dashed', colors['feature'], 1.5, 0.4)
-    create_arrow(85, 86.5, 55, 68.5, 'dashed', colors['feature'], 1.5, 0.4)
-    create_arrow(85, 86.5, 55, 63.5, 'dashed', colors['feature'], 1.5, 0.4)
-    create_arrow(85, 86.5, 57, 42, 'dashed', colors['feature'], 1.5, 0.4)  # Memory -> LLM
+    # ========== ARROWS - Backend to UI ==========
+    create_arrow(36, 86.75, 50, 93.25, 'solid', colors['ui'], 3, 0.9, 'Display')
     
-    # Add title
-    title = ax.text(50, 98, 'System Architecture - ETL Pipeline & Agent Orchestration', 
-                   fontsize=20, ha='center', va='top', weight='bold', 
+    # ========== ARROWS - ETL Pipeline Flow ==========
+    create_arrow(14.5, 16.5, 22.5, 16.5, 'solid', colors['etl'], 2, 0.7)
+    create_arrow(26.5, 16.5, 34.5, 16.5, 'solid', colors['etl'], 2, 0.7)
+    create_arrow(38.5, 16.5, 46.5, 16.5, 'solid', colors['etl'], 2, 0.7)
+    
+    # ========== ARROWS - ETL to Data Stores ==========
+    create_arrow(14.5, 16.5, 15, 31.75, 'solid', colors['etl'], 2, 0.7, 'Chunks')
+    create_arrow(26.5, 16.5, 15, 31.75, 'solid', colors['etl'], 2, 0.7, 'Embeddings')
+    create_arrow(38.5, 16.5, 30, 31.75, 'solid', colors['etl'], 2, 0.7, 'Graph Data')
+    
+    # ========== Add title ==========
+    title = ax.text(50, 98.5, 'Enterprise Chat System Architecture', 
+                   fontsize=24, ha='center', va='top', weight='bold', 
                    color='#212121', zorder=10)
-    title.set_path_effects([path_effects.withStroke(linewidth=4, foreground='white', alpha=0.8)])
+    title.set_path_effects([path_effects.withStroke(linewidth=5, foreground='white', alpha=0.9)])
     
-    # Add legend
-    legend_elements = [
-        mpatches.Patch(facecolor=colors['primary_agent'], label='Primary Agents', edgecolor='white', linewidth=2),
-        mpatches.Patch(facecolor=colors['secondary_agent'], label='Secondary Agents', edgecolor='white', linewidth=2),
-        mpatches.Patch(facecolor=colors['data_store'], label='Data Stores', edgecolor='white', linewidth=2),
-        mpatches.Patch(facecolor=colors['etl'], label='ETL Pipeline', edgecolor='white', linewidth=2),
-        mpatches.Patch(facecolor=colors['llm'], label='LLM Reasoning', edgecolor='white', linewidth=2),
+    # ========== Add layer labels ==========
+    layer_labels = [
+        (5, 96.5, 'UI Layer', colors['ui']),
+        (5, 86.5, 'Backend Layer', colors['backend']),
+        (5, 73.5, 'Agents Layer', colors['agent']),
+        (5, 52, 'Processing Layer', colors['rag']),
+        (5, 32, 'Data Stores', colors['data_store']),
+        (55, 32, 'External Data', colors['external_data']),
+        (55, 16.5, 'Tools & ETL', colors['tool'])
     ]
-    ax.legend(handles=legend_elements, loc='upper left', fontsize=10, 
-             framealpha=0.95, edgecolor='#666', fancybox=True, shadow=True)
+    
+    for x, y, label, color in layer_labels:
+        ax.text(x, y, label, fontsize=11, ha='left', va='center', 
+               weight='bold', color=color, zorder=10,
+               bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.9, edgecolor=color, linewidth=2))
+    
+    # ========== Add legend ==========
+    legend_elements = [
+        mpatches.Patch(facecolor=colors['ui'], label='Frontend Layer', edgecolor='white', linewidth=2),
+        mpatches.Patch(facecolor=colors['backend'], label='Backend Layer', edgecolor='white', linewidth=2),
+        mpatches.Patch(facecolor=colors['agent'], label='Agents', edgecolor='white', linewidth=2),
+        mpatches.Patch(facecolor=colors['data_store'], label='Data Stores', edgecolor='white', linewidth=2),
+        mpatches.Patch(facecolor=colors['external_data'], label='External Data', edgecolor='white', linewidth=2),
+        mpatches.Patch(facecolor=colors['tool'], label='Tools & APIs', edgecolor='white', linewidth=2),
+        mpatches.Patch(facecolor=colors['rag'], label='RAG/LLM', edgecolor='white', linewidth=2),
+    ]
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=9, 
+             framealpha=0.95, edgecolor='#666', fancybox=True, shadow=True, ncol=2)
     
     # Save figure
     plt.tight_layout()
@@ -286,4 +311,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
