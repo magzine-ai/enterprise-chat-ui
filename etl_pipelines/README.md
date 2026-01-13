@@ -152,6 +152,13 @@ flowchart TB
         SNOWMetrics[📈<br/><b>SNOW Metrics</b><br/><small>Ticket Data</small>]
     end
     
+    %% Tools Container
+    subgraph Tools["🔧 Tools"]
+        direction LR
+        SplunkAPITool[📊<br/><b>Splunk API</b>]
+        JIRATool[🎫<br/><b>JIRA API</b>]
+    end
+    
     %% Agent to Search Connections
     API --> RAG1
     Splunk --> SplunkQuery
@@ -159,6 +166,11 @@ flowchart TB
     CodeAnalyzer --> GraphSearch
     JIRA --> JIRAMetrics
     SNOW --> SNOWMetrics
+    
+    %% Tool Connections
+    Splunk -->|Query| SplunkAPITool
+    SplunkAPITool -->|Results| CodeAnalyzer
+    CodeAnalyzer -->|Text| Splunk
     
     %% Data Stores - Bottom Layer
     subgraph DataStores["🗄️ Data Stores"]
