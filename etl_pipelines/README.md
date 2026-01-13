@@ -81,11 +81,6 @@ flowchart TB
         JIRATool[🎫<br/><b>JIRA API</b>]
     end
     
-    %% Tool Connections
-    SplunkAgent -->|Query| SplunkAPITool
-    SplunkAPITool -->|Results| CodeAnalyzer
-    CodeAnalyzer -->|Text| SplunkAgent
-    
     %% RAG Component
     RAG[🔎<br/><b>RAG</b><br/><small>Retrieval Augmented<br/>Generation</small>]
     
