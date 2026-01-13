@@ -9,6 +9,169 @@ This directory contains standalone scripts for:
 - **Graph Building**: Create knowledge graphs from code chunks
 - **Query & Reporting**: Query indexed chunks and generate HTML reports
 
+## System Architecture
+
+The following diagram illustrates the complete architecture of the ETL pipeline system, including data stores, agents, search mechanisms, and the overall reasoning layer:
+
+```mermaid
+graph TB
+    %% User Interface Layer
+    User[👤 User Input] --> Orchestrator[🎯 Orchestrator Agent]
+    
+    %% Orchestrator Agent
+    Orchestrator -->|Primary| API[🔍 API Discovery Agent]
+    Orchestrator -->|Primary| Splunk[📊 Splunk Agent]
+    Orchestrator -->|Secondary| CodeAnalyzer[💻 Code Analyzer Agent]
+    Orchestrator -->|Secondary| JIRA[🎫 JIRA Agent]
+    Orchestrator -->|Secondary| SNOW[❄️ SNOW Agent]
+    
+    %% Data Stores Layer
+    subgraph DataStores["🗄️ Data Stores"]
+        OpenSearch[(🔎 OpenSearch<br/>Vector + Metadata)]
+        GraphDB[(🕸️ Graph Database<br/>TigerDB/NetworkX)]
+        SplunkStore[(📊 Splunk<br/>Logs & Metrics)]
+        JIRAStore[(🎫 JIRA<br/>Issues & Metrics)]
+        SNOWStore[(❄️ ServiceNow<br/>Tickets & Metrics)]
+    end
+    
+    %% Data Layer
+    subgraph DataLayer["📦 Data Layer"]
+        Embeddings[📊 Embeddings<br/>Vector Representations]
+        Chunks[📄 Code Chunks<br/>Methods, Classes, Files]
+        GraphData[🕸️ Graph Data<br/>Relationships & Entities]
+        ConfigData[⚙️ Configuration<br/>Settings & Metadata]
+    end
+    
+    %% ETL Pipeline Layer
+    subgraph ETLPipeline["🔄 ETL Pipeline"]
+        Parser[📝 Code Parser<br/>AST Extraction]
+        Chunker[✂️ Chunking Engine<br/>Strategy-based]
+        Embedder[🧮 Embedding Generator<br/>Azure/OpenAI]
+        GraphBuilder[🕸️ Graph Builder<br/>NetworkX/TigerDB]
+    end
+    
+    %% Agent Processing
+    API --> RAG1[🔍 RAG Similarity Search]
+    Splunk --> SplunkQuery[📊 Splunk Query Generation<br/>Result Population]
+    CodeAnalyzer --> RAG2[🔍 RAG Similarity Search]
+    CodeAnalyzer --> GraphSearch[🕸️ Graph Search<br/>Relationship Traversal]
+    JIRA --> JIRAMetrics[📈 JIRA Metric Search Results]
+    SNOW --> SNOWMetrics[📈 SNOW Metric Search Results]
+    
+    %% Data Store Connections
+    RAG1 --> OpenSearch
+    RAG2 --> OpenSearch
+    GraphSearch --> GraphDB
+    SplunkQuery --> SplunkStore
+    JIRAMetrics --> JIRAStore
+    SNOWMetrics --> SNOWStore
+    
+    %% ETL to Data Stores
+    Parser --> Chunks
+    Chunker --> Chunks
+    Embedder --> Embeddings
+    GraphBuilder --> GraphData
+    
+    Chunks --> OpenSearch
+    Embeddings --> OpenSearch
+    GraphData --> GraphDB
+    
+    %% LLM Reasoning Layer
+    RAG1 --> LLM[🤖 LLM Overall Reasoning<br/>Synthesis & Analysis]
+    SplunkQuery --> LLM
+    RAG2 --> LLM
+    GraphSearch --> LLM
+    JIRAMetrics --> LLM
+    SNOWMetrics --> LLM
+    
+    %% Response Generation
+    LLM --> Response[💬 Response to User<br/>Formatted Output]
+    
+    %% Context Feedback Loop
+    Response -.->|Context Shared| Orchestrator
+    Response -.->|Memory| LLM
+    
+    %% Authentication & Configuration
+    subgraph Security["🔐 Security & Configuration"]
+        Auth[🔑 Authentication<br/>AWS/Certificate-based]
+        Config[⚙️ Config Manager<br/>Settings & Secrets]
+    end
+    
+    Auth --> OpenSearch
+    Auth --> GraphDB
+    Auth --> SplunkStore
+    Config --> Orchestrator
+    Config --> ETLPipeline
+    
+    %% Styling
+    classDef primaryAgent fill:#4CAF50,stroke:#2E7D32,stroke-width:2px,color:#fff
+    classDef secondaryAgent fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+    classDef dataStore fill:#2196F3,stroke:#0D47A1,stroke-width:2px,color:#fff
+    classDef dataLayer fill:#9C27B0,stroke:#4A148C,stroke-width:2px,color:#fff
+    classDef etlLayer fill:#00BCD4,stroke:#006064,stroke-width:2px,color:#fff
+    classDef llmLayer fill:#F44336,stroke:#B71C1C,stroke-width:2px,color:#fff
+    classDef securityLayer fill:#795548,stroke:#3E2723,stroke-width:2px,color:#fff
+    
+    class API,Splunk primaryAgent
+    class CodeAnalyzer,JIRA,SNOW secondaryAgent
+    class OpenSearch,GraphDB,SplunkStore,JIRAStore,SNOWStore dataStore
+    class Embeddings,Chunks,GraphData,ConfigData dataLayer
+    class Parser,Chunker,Embedder,GraphBuilder etlLayer
+    class LLM,Response llmLayer
+    class Auth,Config securityLayer
+```
+
+### Architecture Components
+
+#### 🎯 Orchestrator Agent
+- **Primary Function**: Routes user queries to appropriate specialized agents
+- **Intelligence**: Determines which agents to invoke based on query intent
+- **Context Management**: Maintains conversation context across interactions
+
+#### 🔍 Specialized Agents
+
+**Primary Agents:**
+- **API Discovery Agent**: Discovers and documents APIs using RAG similarity search
+- **Splunk Agent**: Generates Splunk queries and processes log/metric results
+
+**Secondary Agents:**
+- **Code Analyzer Agent**: Analyzes code using both RAG and graph search
+- **JIRA Agent**: Retrieves JIRA issues and metrics
+- **SNOW Agent**: Retrieves ServiceNow tickets and metrics
+
+#### 🗄️ Data Stores
+
+- **OpenSearch**: Vector embeddings + metadata for semantic search
+- **Graph Database (TigerDB/NetworkX)**: Code relationships and entity graphs
+- **Splunk**: Logs, metrics, and observability data
+- **JIRA**: Issue tracking and project metrics
+- **ServiceNow**: IT service management and tickets
+
+#### 📦 Data Layer
+
+- **Embeddings**: Vector representations of code chunks (Azure OpenAI/OpenAI)
+- **Code Chunks**: Parsed methods, classes, and files with metadata
+- **Graph Data**: Entity relationships, dependencies, and call graphs
+- **Configuration**: Application settings, secrets, and metadata
+
+#### 🔄 ETL Pipeline
+
+- **Code Parser**: AST extraction using TreeSitter/javalang
+- **Chunking Engine**: Strategy-based code chunking (method, class, hybrid)
+- **Embedding Generator**: Batch embedding generation (Azure/OpenAI)
+- **Graph Builder**: NetworkX graph construction and TigerDB porting
+
+#### 🤖 LLM Reasoning Layer
+
+- **Synthesis**: Combines results from multiple agents and search mechanisms
+- **Analysis**: Provides comprehensive reasoning across all data sources
+- **Response Generation**: Formats output for user consumption
+
+#### 🔐 Security & Configuration
+
+- **Authentication**: AWS credentials, certificate-based auth for Azure
+- **Configuration Management**: Centralized settings and secret management
+
 ## Project Structure
 
 ```
