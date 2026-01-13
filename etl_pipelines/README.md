@@ -365,10 +365,28 @@ flowchart TB
 
 ### Architecture Components
 
-#### 🎯 Orchestrator Agent
-- **Primary Function**: Routes user queries to appropriate specialized agents
-- **Intelligence**: Determines which agents to invoke based on query intent
-- **Context Management**: Maintains conversation context across interactions
+#### 🖥️ Frontend Layer
+
+- **React UI**: 
+  - Chat interface with message rendering
+  - Real-time WebSocket communication
+  - Activity indicators for agent execution
+  - Approval dialogs for human-in-the-loop workflows
+  - Block-based content rendering (code, charts, tables, etc.)
+
+#### ⚙️ Backend Layer
+
+- **FastAPI**:
+  - REST API endpoints for conversations, messages, jobs
+  - WebSocket server for real-time updates
+  - Async job processing for long-running tasks
+  - Integration with agents, LLM, and data stores
+  
+- **Orchestrator Agent**:
+  - Routes user queries to appropriate specialized agents
+  - Determines which agents to invoke based on query intent
+  - Maintains conversation context across interactions
+  - Manages workflow execution (parallel, sequential, conditional)
 
 #### 🔍 Specialized Agents
 
@@ -380,11 +398,24 @@ flowchart TB
 
 #### 🗄️ Data Stores
 
-- **OpenSearch**: Vector embeddings + metadata for semantic search
-- **Graph Database (TigerDB/NetworkX)**: Code relationships and entity graphs
-- **Splunk**: Logs, metrics, and observability data
-- **JIRA**: Issue tracking and project metrics
-- **ServiceNow**: IT service management and tickets
+- **VectorDB (OpenSearch)**: Vector embeddings + metadata for semantic search
+- **TigerDB**: Graph database for code relationships and entity graphs (NetworkX for in-memory)
+- **AWS Aurora (PostgreSQL)**: 
+  - Primary data persistence layer
+  - Stores conversations, messages, user data
+  - Transactional data and application state
+
+#### 🌐 External Data Sources
+
+- **Splunk (SPL)**: Logs, metrics, and observability data (accessed via API)
+- **JIRA**: Issue tracking and project metrics (accessed via API)
+- **ServiceNow (SNOW)**: IT service management and tickets (accessed via API)
+
+#### 🔧 External Tools & APIs
+
+- **Splunk (SPL)**: External API for querying Splunk logs and metrics
+- **JIRA**: External API for accessing JIRA issues and project data
+- **ServiceNow (SNOW)**: External API for ITSM operations
 
 #### 📦 Data Layer
 
