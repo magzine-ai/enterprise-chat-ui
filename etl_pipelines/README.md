@@ -231,7 +231,8 @@ etl_pipelines/
     ├── standalone_build_repo_independent.py      # Repository indexing
     ├── standalone_query_to_html_independent.py   # Query & HTML reports
     ├── visualize_graph_3d.py                     # 3D graph visualization
-    └── generate_architecture_diagram.py          # Architecture diagram generator
+    ├── generate_architecture_diagram.py          # Architecture diagram generator
+    └── standalone_xml_parser.py                   # XML data/rules file parser
 ```
 
 ## Scripts
@@ -345,6 +346,119 @@ python generate_architecture_diagram.py --output architecture.png --show
 **Requirements**:
 - `matplotlib` - For diagram generation
 - Optional: `networkx` - For advanced layout algorithms
+
+### 5. `standalone_xml_parser.py`
+
+**Purpose**: Parse XML data and rules files from repositories, extract meaningful chunks, and optionally generate embeddings and index to OpenSearch.
+
+**Features**:
+- Discovers XML files in repository (excludes build/config files like `pom.xml`, `web.xml`)
+- Classifies XML files as `data`, `rules`, or `generic`
+- Extracts chunks based on XML type:
+  - **Rules files**: Extracts individual rules with metadata (name, type, ID, description)
+  - **Data files**: Extracts data elements (records, items, entries)
+  - **Generic files**: Chunks by size with overlap
+- Generates unique chunk IDs and content hashes
+- Optional OpenAI embeddings for semantic search
+- Optional OpenSearch indexing with XML-specific mapping
+- Progress bars for long-running operations
+- Statistics and reporting
+
+**Usage**:
+
+```bash
+# Basic parsing (save to JSON only)
+python standalone_xml_parser.py \
+  --repo-path /path/to/repo \
+  --output-dir ./xml_output
+
+# With embeddings
+python standalone_xml_parser.py \
+  --repo-path /path/to/repo \
+  --output-dir ./xml_output \
+  --openai-api-key sk-... \
+  --embedding-model text-embedding-3-small
+
+# With OpenSearch indexing
+python standalone_xml_parser.py \
+  --repo-path /path/to/repo \
+  --output-dir ./xml_output \
+  --opensearch-host https://your-opensearch-host \
+  --opensearch-index xml-chunks \
+  --use-aws-auth \
+  --aws-region us-east-1
+
+# Exclude specific XML patterns
+python standalone_xml_parser.py \
+  --repo-path /path/to/repo \
+  --exclude-patterns config.xml schema.xml
+```
+
+**Arguments**:
+- `--repo-path` - Path to repository root (required)
+- `--output-dir` - Output directory for chunks JSON (default: `./xml_output`)
+- `--max-chunk-size` - Maximum chunk size in characters (default: 2000)
+- `--chunk-overlap` - Chunk overlap size (default: 200)
+- `--exclude-patterns` - Additional XML file patterns to exclude
+- `--openai-api-key` - OpenAI API key for embeddings
+- `--embedding-model` - Embedding model (default: `text-embedding-3-small`)
+- `--no-embeddings` - Skip embedding generation
+- `--opensearch-host` - OpenSearch host URL
+- `--opensearch-index` - OpenSearch index name (default: `xml-chunks`)
+- `--use-aws-auth` - Use AWS authentication for OpenSearch
+- `--aws-region` - AWS region for authentication (default: `us-east-1`)
+- `--no-verify-certs` - Disable SSL certificate verification
+
+**Output Format**:
+
+The script generates a JSON file (`xml_chunks.json`) with:
+- Repository metadata
+- Statistics (file counts by XML type)
+- All chunks with metadata:
+  - `type`: `xml_rule`, `xml_data`, or `xml_generic`
+  - `xml_type`: `rules`, `data`, or `generic`
+  - `rule_name`, `rule_type`, `rule_id` (for rules)
+  - `element_name`, `element_id` (for data)
+  - `file_path`, `start_line`, `end_line`
+  - `code`, `summary`, `description`
+  - `chunk_id`, `_id`, `embedding` (if generated)
+
+**OpenSearch Mapping**:
+
+The script creates an index with XML-specific fields:
+- `xml_type`: Classification (`rules`, `data`, `generic`)
+- `rule_name`, `rule_type`, `rule_id`: Rule metadata
+- `element_name`, `element_id`: Data element metadata
+- `embedding`: Vector embeddings for semantic search
+- Standard fields: `chunk_id`, `file_path`, `code`, `summary`, etc.
+
+**Querying XML Chunks**:
+
+```python
+# Query for rules
+query = {
+    "query": {
+        "bool": {
+            "must": [
+                {"match": {"code": "your search term"}},
+                {"term": {"xml_type": "rules"}}
+            ]
+        }
+    }
+}
+
+# Query for specific rule type
+query = {
+    "query": {
+        "bool": {
+            "must": [
+                {"term": {"xml_type": "rules"}},
+                {"term": {"rule_type": "validation"}}
+            ]
+        }
+    }
+}
+```
 
 **3D Visualization in Build Script**:
 
