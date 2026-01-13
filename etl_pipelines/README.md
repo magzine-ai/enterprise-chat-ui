@@ -175,8 +175,6 @@ flowchart TB
 - **JIRA Agent**: Retrieves JIRA issues and metrics
 - **SNOW Agent**: Retrieves ServiceNow tickets and metrics
 
-**Agent Features:**
-
 #### 🗄️ Data Stores
 
 - **OpenSearch**: Vector embeddings + metadata for semantic search
