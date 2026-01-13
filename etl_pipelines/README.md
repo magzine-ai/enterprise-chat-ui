@@ -54,31 +54,46 @@ Output format (strict):
 
 ### Simple System Architecture
 
-The following diagram shows a simplified view of the core system architecture with agents, data stores, tools, and LLM integration:
+The following diagram shows a simplified view of the core system architecture with UI, backend, agents, data stores, tools, and LLM integration:
 
 ```mermaid
 flowchart TB
+    %% UI Layer
+    subgraph UILayer["🖥️ Frontend Layer"]
+        direction LR
+        ReactUI[⚛️<br/><b>React UI</b><br/><small>Chat Interface<br/>WebSocket Client</small>]
+    end
+    
+    %% Backend Layer
+    subgraph BackendLayer["⚙️ Backend Layer"]
+        direction LR
+        FastAPI[🚀<br/><b>FastAPI</b><br/><small>REST API<br/>WebSocket Server</small>]
+        Orchestrator[🎯<br/><b>Orchestrator</b><br/><small>Agent Routing</small>]
+    end
+    
     %% Agents Container
     subgraph Agents["🤖 Agents"]
         direction TB
         APIDiscovery[🔍<br/><b>API Discovery</b>]
-        SplunkAgent[📊<br/><b>Splunk Agent</b>]
+        SplunkAgent[SPL<br/><b>Splunk Agent</b>]
         CodeAnalyzer[💻<br/><b>Code Analyzer</b>]
-        JIRAAgent[🎫<br/><b>JIRA</b>]
+        JIRAAgent[JIRA<br/><b>JIRA Agent</b>]
     end
     
     %% Data Store Container
-    subgraph DataStore["🗄️ Data Store"]
+    subgraph DataStore["🗄️ Data Stores"]
         direction LR
-        TigerDB[(🕸️🐅<br/><b>TigerDB</b>)]
         VectorDB[(🔍<br/><b>VectorDB</b><br/><small>OpenSearch</small>)]
+        TigerDB[(TDB<br/><b>TigerDB</b><br/><small>Graph DB</small>)]
+        Aurora[(AURORA<br/><b>AWS Aurora</b><br/><small>PostgreSQL</small>)]
     end
     
     %% Tools Container
-    subgraph Tools["🔧 Tools"]
+    subgraph Tools["🔧 External Tools"]
         direction LR
-        SplunkAPITool[📊<br/><b>Splunk API</b>]
-        JIRATool[🎫<br/><b>JIRA API</b>]
+        SplunkTool[SPL<br/><b>Splunk</b>]
+        JIRATool[JIRA<br/><b>JIRA</b>]
+        SNOWTool[SNOW<br/><b>ServiceNow</b>]
     end
     
     %% RAG Component
@@ -87,25 +102,47 @@ flowchart TB
     %% LLM Component
     LLM[🧠<br/><b>LLM</b><br/><small>OpenAI/Claude</small>]
     
+    %% UI to Backend
+    ReactUI -->|HTTP/WS| FastAPI
+    FastAPI -->|WebSocket| ReactUI
+    
+    %% Backend to Orchestrator
+    FastAPI --> Orchestrator
+    
+    %% Orchestrator to Agents
+    Orchestrator --> Agents
+    
     %% Connections
     VectorDB -->|Vector Search| RAG
     SplunkAgent -->|Query| RAG
     RAG -->|Context| LLM
     LLM -->|Response| SplunkAgent
-    SplunkAgent -->|Query| SplunkAPITool
-    SplunkAPITool -->|Results| CodeAnalyzer
+    SplunkAgent -->|Query| SplunkTool
+    SplunkTool -->|Results| CodeAnalyzer
     CodeAnalyzer -->|Text| SplunkAgent
     
+    %% Backend to Data Stores
+    FastAPI -->|Read/Write| Aurora
+    Orchestrator -->|Query| VectorDB
+    Orchestrator -->|Query| TigerDB
+    
+    %% Agents to Tools
+    JIRAAgent -->|Query| JIRATool
+    
     %% Styling
+    classDef uiStyle fill:#E1F5FE,stroke:#01579B,stroke-width:3px,color:#000
+    classDef backendStyle fill:#F3E5F5,stroke:#4A148C,stroke-width:3px,color:#000
     classDef agentStyle fill:#BBDEFB,stroke:#1976D2,stroke-width:2px,color:#000
     classDef dataStoreStyle fill:#E1F5FE,stroke:#0277BD,stroke-width:2px,color:#000
     classDef toolStyle fill:#FFF3E0,stroke:#E65100,stroke-width:2px,color:#000
     classDef ragStyle fill:#F3E5F5,stroke:#7B1FA2,stroke-width:3px,color:#000
     classDef llmStyle fill:#FFEBEE,stroke:#C62828,stroke-width:3px,color:#000
     
+    class ReactUI uiStyle
+    class FastAPI,Orchestrator backendStyle
     class APIDiscovery,SplunkAgent,CodeAnalyzer,JIRAAgent agentStyle
-    class TigerDB,VectorDB dataStoreStyle
-    class SplunkAPITool,JIRATool toolStyle
+    class TigerDB,VectorDB,Aurora dataStoreStyle
+    class SplunkTool,JIRATool,SNOWTool toolStyle
     class RAG ragStyle
     class LLM llmStyle
 ```
@@ -116,21 +153,37 @@ The following diagram illustrates the complete architecture of the ETL pipeline 
 
 ```mermaid
 flowchart TB
-    %% User Interface Layer - Top
-    User[👤<br/><b>User Input</b><br/><small>Query & Context</small>]
-    User -->|Query Intent| Orchestrator
+    %% UI Layer - Top
+    subgraph UILayer["🖥️ Frontend Layer"]
+        direction LR
+        ReactUI[⚛️<br/><b>React UI</b><br/><small>Chat Interface<br/>Activity Indicators<br/>Approval Dialogs</small>]
+    end
     
-    %% Orchestrator - Central Hub
-    Orchestrator[🎯<br/><b>Orchestrator Agent</b><br/><small>Intelligent Routing</small>]
+    %% Backend Layer
+    subgraph BackendLayer["⚙️ Backend Layer"]
+        direction LR
+        FastAPI[🚀<br/><b>FastAPI</b><br/><small>REST API<br/>WebSocket Server<br/>Job Processing</small>]
+        Orchestrator[🎯<br/><b>Orchestrator Agent</b><br/><small>Intelligent Routing</small>]
+    end
+    
+    %% User to UI
+    User[👤<br/><b>User</b>] -->|Interacts| ReactUI
+    
+    %% UI to Backend
+    ReactUI -->|HTTP/WebSocket| FastAPI
+    FastAPI -->|WebSocket Events| ReactUI
+    
+    %% Backend to Orchestrator
+    FastAPI --> Orchestrator
     
     %% Agents - Single Layer
     subgraph Agents["🤖 Specialized Agents"]
         direction TB
         API[🔍<br/><b>API Discovery</b><br/><small>RAG Search</small>]
-        Splunk[📊<br/><b>Splunk Agent</b><br/><small>Log Analysis</small>]
+        Splunk[SPL<br/><b>Splunk Agent</b><br/><small>Log Analysis</small>]
         CodeAnalyzer[💻<br/><b>Code Analyzer</b><br/><small>Code Intelligence</small>]
-        JIRA[🎫<br/><b>JIRA Agent</b><br/><small>Issue Tracking</small>]
-        SNOW[❄️<br/><b>SNOW Agent</b><br/><small>ITSM</small>]
+        JIRA[JIRA<br/><b>JIRA Agent</b><br/><small>Issue Tracking</small>]
+        SNOW[SNOW<br/><b>ServiceNow Agent</b><br/><small>ITSM</small>]
     end
     
     %% Orchestrator Routes
@@ -148,10 +201,11 @@ flowchart TB
     end
     
     %% Tools Container
-    subgraph Tools["🔧 Tools"]
+    subgraph Tools["🔧 External Tools & APIs"]
         direction LR
-        SplunkAPITool[📊<br/><b>Splunk API</b>]
-        JIRATool[🎫<br/><b>JIRA API</b>]
+        SplunkTool[SPL<br/><b>Splunk</b><br/><small>Logs & Metrics</small>]
+        JIRATool[JIRA<br/><b>JIRA</b><br/><small>Issue Tracking</small>]
+        SNOWTool[SNOW<br/><b>ServiceNow</b><br/><small>ITSM</small>]
     end
     
     %% Agent to Search Connections
@@ -163,18 +217,26 @@ flowchart TB
     SNOW --> SNOWMetrics
     
     %% Tool Connections
-    Splunk -->|Query| SplunkAPITool
-    SplunkAPITool -->|Results| CodeAnalyzer
+    Splunk -->|Query| SplunkTool
+    SplunkTool -->|Results| CodeAnalyzer
     CodeAnalyzer -->|Text| Splunk
+    JIRA -->|Query| JIRATool
+    SNOW -->|Query| SNOWTool
     
     %% Data Stores - Bottom Layer
     subgraph DataStores["🗄️ Data Stores"]
         direction LR
         VectorDB[(🔍<br/><b>VectorDB</b><br/><small>OpenSearch<br/>Vector + Metadata</small>)]
-        GraphDB[(🕸️🐅<br/><b>TigerDB</b><br/><small>Graph Database<br/>NetworkX</small>)]
-        SplunkStore[(📊<br/><b>Splunk</b><br/><small>Logs & Metrics</small>)]
-        JIRAStore[(🎫<br/><b>JIRA</b><br/><small>Issues & Metrics</small>)]
-        SNOWStore[(❄️<br/><b>ServiceNow</b><br/><small>Tickets & Metrics</small>)]
+        GraphDB[(TDB<br/><b>TigerDB</b><br/><small>Graph Database<br/>NetworkX</small>)]
+        Aurora[(AURORA<br/><b>AWS Aurora</b><br/><small>PostgreSQL<br/>Conversations & Messages</small>)]
+    end
+    
+    %% External Data Sources
+    subgraph ExternalData["🌐 External Data Sources"]
+        direction LR
+        SplunkStore[(SPL<br/><b>Splunk</b><br/><small>Logs & Metrics</small>)]
+        JIRAStore[(JIRA<br/><b>JIRA</b><br/><small>Issues & Metrics</small>)]
+        SNOWStore[(SNOW<br/><b>ServiceNow</b><br/><small>Tickets & Metrics</small>)]
     end
     
     %% Search to Data Store Connections
@@ -184,6 +246,11 @@ flowchart TB
     SplunkQuery --> SplunkStore
     JIRAMetrics --> JIRAStore
     SNOWMetrics --> SNOWStore
+    
+    %% Backend to Data Persistence
+    FastAPI -->|Read/Write| Aurora
+    FastAPI -->|Query| VectorDB
+    FastAPI -->|Query| GraphDB
     
     %% Data Layer - Processing
     subgraph DataLayer["📦 Data Processing Layer"]
@@ -239,11 +306,16 @@ flowchart TB
     LLM -->|Response| SplunkAgent
     
     %% Response Generation
-    LLM --> Response[💬<br/><b>Response to User</b><br/><small>Formatted Output</small>]
+    LLM --> Response[💬<br/><b>Response</b><br/><small>Formatted Output</small>]
+    
+    %% Response to Backend and UI
+    Response --> FastAPI
+    FastAPI -->|Display| ReactUI
     
     %% Context Feedback Loop
     Response -.->|Context Shared| Orchestrator
     Response -.->|Memory| LLM
+    FastAPI -->|Persist| Aurora
     
     %% Agent Features
     subgraph AgentFeatures["🛡️ Agent Features"]
@@ -259,6 +331,8 @@ flowchart TB
     
     %% Styling with better colors and UX
     classDef userStyle fill:#E3F2FD,stroke:#1976D2,stroke-width:3px,color:#000
+    classDef uiStyle fill:#E1F5FE,stroke:#01579B,stroke-width:3px,color:#000
+    classDef backendStyle fill:#F3E5F5,stroke:#4A148C,stroke-width:3px,color:#000
     classDef orchestratorStyle fill:#C8E6C9,stroke:#388E3C,stroke-width:3px,color:#000
     classDef primaryAgentStyle fill:#BBDEFB,stroke:#1976D2,stroke-width:2px,color:#000
     classDef secondaryAgentStyle fill:#FFE0B2,stroke:#F57C00,stroke-width:2px,color:#000
@@ -266,6 +340,7 @@ flowchart TB
     classDef ragStyle fill:#F3E5F5,stroke:#7B1FA2,stroke-width:3px,color:#000
     classDef toolStyle fill:#FFF3E0,stroke:#E65100,stroke-width:2px,color:#000
     classDef dataStoreStyle fill:#E1F5FE,stroke:#0277BD,stroke-width:2px,color:#000
+    classDef externalDataStyle fill:#FFF9C4,stroke:#F57F17,stroke-width:2px,color:#000
     classDef dataLayerStyle fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#000
     classDef etlStyle fill:#E0F2F1,stroke:#00695C,stroke-width:2px,color:#000
     classDef llmStyle fill:#FFEBEE,stroke:#C62828,stroke-width:3px,color:#000
@@ -273,12 +348,14 @@ flowchart TB
     classDef featureStyle fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#000
     
     class User userStyle
-    class Orchestrator orchestratorStyle
+    class ReactUI uiStyle
+    class FastAPI,Orchestrator backendStyle
     class API,Splunk,CodeAnalyzer,JIRA,SNOW primaryAgentStyle
     class RAG1,RAG2,GraphSearch,SplunkQuery,JIRAMetrics,SNOWMetrics searchStyle
     class RAG ragStyle
-    class SplunkAPITool,JIRATool toolStyle
-    class VectorDB,GraphDB,SplunkStore,JIRAStore,SNOWStore dataStoreStyle
+    class SplunkTool,JIRATool,SNOWTool toolStyle
+    class VectorDB,GraphDB,Aurora dataStoreStyle
+    class SplunkStore,JIRAStore,SNOWStore externalDataStyle
     class Embeddings,Chunks,GraphData dataLayerStyle
     class Parser,Chunker,Embedder,GraphBuilder etlStyle
     class LLM llmStyle
