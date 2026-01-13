@@ -52,7 +52,30 @@ Output format (strict):
 
 ## System Architecture
 
-### Simple System Architecture
+### Visual Architecture Diagram
+
+A high-quality visual architecture diagram is available as an image file. Generate it using:
+
+```bash
+python etl_pipelines/scripts/generate_architecture_diagram.py \
+  --output architecture_diagram.png \
+  --dpi 300
+```
+
+The generated diagram includes:
+- **Frontend Layer**: React UI with WebSocket and activity indicators
+- **Backend Layer**: FastAPI with REST API and WebSocket server
+- **Agents Layer**: Specialized agents (API Discovery, Splunk, Code Analyzer, JIRA, ServiceNow)
+- **Processing Layer**: RAG and LLM for reasoning and synthesis
+- **Data Stores**: VectorDB (OpenSearch), TigerDB, AWS Aurora (PostgreSQL)
+- **External Data Sources**: Splunk, JIRA, ServiceNow
+- **Tools & ETL**: External APIs and ETL pipeline components
+- **Neatly organized arrows** showing data flow and relationships
+- **Real tool icons** (SPL, JIRA, SNOW, TDB, AURORA)
+
+**Note**: A pre-generated diagram is available at `architecture_diagram.png` in the project root.
+
+### Simple System Architecture (Mermaid)
 
 The following diagram shows a simplified view of the core system architecture with UI, backend, agents, data stores, tools, and LLM integration:
 
