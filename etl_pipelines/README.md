@@ -97,8 +97,8 @@ flowchart TB
     SplunkAgent -->|Query| RAG
     RAG -->|Context| LLM
     LLM -->|Response| SplunkAgent
-    SplunkAgent -->|Query| SplunkAPI
-    SplunkAPI -->|Results| CodeAnalyzer
+    SplunkAgent -->|Query| SplunkAPITool
+    SplunkAPITool -->|Results| CodeAnalyzer
     CodeAnalyzer -->|Text| SplunkAgent
     
     %% Styling
@@ -110,7 +110,7 @@ flowchart TB
     
     class APIDiscovery,SplunkAgent,CodeAnalyzer,JIRAAgent agentStyle
     class TigerDB,VectorDB dataStoreStyle
-    class SplunkAPI,JIRATool toolStyle
+    class SplunkAPITool,JIRATool toolStyle
     class RAG ragStyle
     class LLM llmStyle
 ```
