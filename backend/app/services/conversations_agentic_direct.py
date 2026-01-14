@@ -2999,8 +2999,3 @@ async def process_conversation_agentic_direct(
             "thinking_mode": thinking_mode,
             "agent": agent
         }
-```
-
-Updating the API endpoint to use direct agents:
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
-read_file
