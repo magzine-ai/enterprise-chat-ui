@@ -1015,6 +1015,380 @@ class GeneralAgent(BaseAgent):
             )
 
 
+class SelectorAgent(BaseAgent):
+    """Agent that analyzes user intent and selects appropriate specialized agents."""
+    
+    def __init__(self, google_adk_client: Optional[GoogleADKClient] = None):
+        super().__init__(
+            name="selector",
+            description="Analyzes user intent and selects appropriate specialized agents",
+            google_adk_client=google_adk_client
+        )
+        self.available_agents = {
+            "code_search_rag": "For code repository search, API documentation, code questions (uses RAG)",
+            "splunk": "For Splunk queries, log analysis, observability",
+            "general": "For general questions, summarization, and conversations",
+            "email_generator": "For generating and sending emails with summarization capabilities"
+        }
+    
+    async def execute(
+        self,
+        user_message: str,
+        conversation_id: int,
+        conversation_history: List[Dict[str, Any]],
+        **kwargs
+    ) -> AgentResult:
+        """Analyze user intent and select appropriate agents with workflow structure."""
+        try:
+            await self._send_activity(
+                conversation_id,
+                "Analyzing user intent...",
+                {"step": "intent_analysis"}
+            )
+            
+            # Build conversation context
+            context = self._build_conversation_context(conversation_history)
+            
+            prompt = f"""
+            Analyze this user message and determine which specialized agents should be invoked and the workflow structure.
+            
+            User Message: "{user_message}"
+            
+            Conversation Context:
+            {context}
+            
+            Available Agents:
+            {self._format_available_agents()}
+            
+            Determine if the query requires:
+            - Multiple agents (parallel or sequential)
+            - Human approval/review (for sensitive operations, sending emails, executing queries)
+            - Summarization of multiple agent responses
+            - Conditional branching based on results
+            
+            Respond with JSON format:
+            {{
+                "workflow_type": "simple" or "complex",
+                "phases": [
+                    {{
+                        "phase": 1,
+                        "type": "parallel" or "sequential",
+                        "agents": ["agent1", "agent2"],
+                        "condition": null or "condition_expression"
+                    }},
+                    {{
+                        "phase": 2,
+                        "type": "human_approval" or "summarization" or "sequential",
+                        "agents": ["agent_name"] or null,
+                        "condition": "if phase1.completed",
+                        "approval_type": "review" or "confirmation" (if type is human_approval)
+                    }}
+                ],
+                "summarization": {{
+                    "required": true or false,
+                    "agent": "general"
+                }},
+                "human_approval": {{
+                    "required": true or false,
+                    "steps": ["review", "confirmation"]
+                }},
+                "reasoning": "Why this workflow structure was selected"
+            }}
+            
+            Return ONLY valid JSON, no other text.
+            """
+            
+            response = await self._generate_with_llm(
+                prompt=prompt,
+                system_prompt="You are an intelligent agent selector. Analyze user intent and create optimal workflow plans with phases, conditionals, and human-in-loop steps. Always return valid JSON."
+            )
+            
+            # Parse JSON response
+            import re
+            json_match = re.search(r'\{.*"phases".*\}', response, re.DOTALL)
+            if json_match:
+                plan = json.loads(json_match.group())
+            else:
+                # Fallback: try to parse the whole response
+                plan = json.loads(response)
+            
+            await self._send_activity(
+                conversation_id,
+                f"Selected {len(plan.get('phases', []))} workflow phase(s)",
+                {"step": "agent_selection", "plan": plan}
+            )
+            
+            # Return plan as metadata in AgentResult
+            return AgentResult(
+                content=f"Selected workflow: {plan.get('workflow_type', 'simple')} with {len(plan.get('phases', []))} phase(s)",
+                blocks=[],
+                status=AgentStatus.COMPLETED,
+                metadata={
+                    "agent": self.name,
+                    "workflow_plan": plan,
+                    "selected_agents": self._extract_agents_from_plan(plan)
+                }
+            )
+            
+        except Exception as e:
+            await self._send_activity(
+                conversation_id,
+                f"Error in agent selection: {str(e)[:50]}",
+                {"step": "error", "error": str(e)}
+            )
+            # Fallback to keyword-based selection
+            return AgentResult(
+                content="Using fallback agent selection",
+                blocks=[],
+                status=AgentStatus.COMPLETED,
+                metadata={
+                    "agent": self.name,
+                    "workflow_plan": self._fallback_selection(user_message),
+                    "fallback": True
+                }
+            )
+    
+    def _format_available_agents(self) -> str:
+        """Format available agents for prompt."""
+        lines = []
+        for agent_name, description in self.available_agents.items():
+            lines.append(f"- {agent_name}: {description}")
+        return "\n".join(lines)
+    
+    def _build_conversation_context(self, conversation_history: List[Dict[str, Any]]) -> str:
+        """Build conversation context from history."""
+        if not conversation_history:
+            return "No previous conversation context."
+        
+        context_lines = []
+        for msg in conversation_history[-5:]:  # Last 5 messages
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")[:200]  # Truncate long messages
+            context_lines.append(f"{role}: {content}")
+        
+        return "\n".join(context_lines)
+    
+    def _extract_agents_from_plan(self, plan: Dict[str, Any]) -> List[str]:
+        """Extract all agent names from workflow plan."""
+        agents = set()
+        for phase in plan.get("phases", []):
+            if phase.get("agents"):
+                agents.update(phase["agents"])
+        return list(agents)
+    
+    def _fallback_selection(self, user_message: str) -> Dict[str, Any]:
+        """Fallback keyword-based selection."""
+        message_lower = user_message.lower()
+        agents = []
+        
+        if any(kw in message_lower for kw in ["code", "api", "method", "class", "function", "endpoint", "repository"]):
+            agents.append("code_search_rag")
+        if any(kw in message_lower for kw in ["splunk", "spl", "log", "query", "observability"]):
+            agents.append("splunk")
+        if any(kw in message_lower for kw in ["email", "send email", "compose email", "mail"]):
+            agents.append("email_generator")
+        if not agents:
+            agents.append("general")
+        
+        return {
+            "workflow_type": "simple",
+            "phases": [{
+                "phase": 1,
+                "type": "sequential",
+                "agents": agents,
+                "condition": None
+            }],
+            "summarization": {"required": len(agents) > 1, "agent": "general"},
+            "human_approval": {"required": False, "steps": []},
+            "reasoning": "Keyword-based fallback selection"
+        }
+
+
+class ResponseBuilderAgent(BaseAgent):
+    """Agent that formats and builds cohesive responses from multiple agent results."""
+    
+    def __init__(self, google_adk_client: Optional[GoogleADKClient] = None):
+        super().__init__(
+            name="response_builder",
+            description="Formats and builds cohesive responses from multiple agent results",
+            google_adk_client=google_adk_client
+        )
+    
+    async def execute(
+        self,
+        user_message: str,
+        conversation_id: int,
+        conversation_history: List[Dict[str, Any]],
+        agent_results: List[AgentResult],
+        **kwargs
+    ) -> AgentResult:
+        """Build a cohesive response from multiple agent results."""
+        try:
+            await self._send_activity(
+                conversation_id,
+                "Building cohesive response...",
+                {"step": "response_building"}
+            )
+            
+            if not agent_results:
+                return AgentResult(
+                    content="No results to format.",
+                    blocks=[],
+                    status=AgentStatus.COMPLETED,
+                    metadata={"agent": self.name}
+                )
+            
+            # If only one result, return it directly (with minor formatting)
+            if len(agent_results) == 1:
+                result = agent_results[0]
+                await self._send_activity(
+                    conversation_id,
+                    "Response formatted",
+                    {"step": "complete"}
+                )
+                return result
+            
+            # Multiple results: aggregate and format
+            await self._send_activity(
+                conversation_id,
+                f"Aggregating {len(agent_results)} agent result(s)...",
+                {"step": "aggregation", "count": len(agent_results)}
+            )
+            
+            # Build aggregation prompt
+            results_summary = self._build_results_summary(agent_results)
+            
+            prompt = f"""
+            You are a response builder. Your task is to create a cohesive, well-formatted response from multiple agent results.
+            
+            Original User Query: "{user_message}"
+            
+            Agent Results:
+            {results_summary}
+            
+            Create a comprehensive response that:
+            1. Synthesizes information from all agent results
+            2. Maintains context and coherence
+            3. Highlights key findings from each agent
+            4. Provides a clear, structured answer
+            5. Preserves important blocks (code, tables, charts) from agent results
+            
+            Format your response as JSON:
+            {{
+                "content": "Main narrative response text",
+                "summary": "Brief executive summary",
+                "key_findings": ["finding1", "finding2"],
+                "agent_contributions": {{
+                    "agent_name": "What this agent contributed"
+                }}
+            }}
+            
+            Return ONLY valid JSON, no other text.
+            """
+            
+            response = await self._generate_with_llm(
+                prompt=prompt,
+                system_prompt="You are an expert response builder. Create cohesive, well-structured responses from multiple agent outputs. Always return valid JSON."
+            )
+            
+            # Parse JSON response
+            import re
+            json_match = re.search(r'\{.*"content".*\}', response, re.DOTALL)
+            if json_match:
+                formatted = json.loads(json_match.group())
+            else:
+                formatted = json.loads(response)
+            
+            # Aggregate all blocks from agent results
+            all_blocks = []
+            for result in agent_results:
+                if result.blocks:
+                    all_blocks.extend(result.blocks)
+            
+            # Build final content
+            content_parts = [formatted.get("content", "")]
+            
+            if formatted.get("summary"):
+                content_parts.append(f"\n**Summary:** {formatted['summary']}")
+            
+            if formatted.get("key_findings"):
+                content_parts.append("\n**Key Findings:**")
+                for finding in formatted["key_findings"]:
+                    content_parts.append(f"- {finding}")
+            
+            if formatted.get("agent_contributions"):
+                content_parts.append("\n**Agent Contributions:**")
+                for agent, contribution in formatted["agent_contributions"].items():
+                    content_parts.append(f"- **{agent}**: {contribution}")
+            
+            final_content = "\n".join(content_parts)
+            
+            await self._send_activity(
+                conversation_id,
+                "Response built successfully",
+                {"step": "complete"}
+            )
+            
+            return AgentResult(
+                content=final_content,
+                blocks=all_blocks,
+                status=AgentStatus.COMPLETED,
+                metadata={
+                    "agent": self.name,
+                    "synthesized_from": [r.metadata.get("agent", "unknown") for r in agent_results],
+                    "formatted_response": formatted
+                }
+            )
+            
+        except Exception as e:
+            await self._send_activity(
+                conversation_id,
+                f"Error building response: {str(e)[:50]}",
+                {"step": "error", "error": str(e)}
+            )
+            # Fallback: simple aggregation
+            return self._simple_aggregation(agent_results)
+    
+    def _build_results_summary(self, agent_results: List[AgentResult]) -> str:
+        """Build a summary of agent results for the prompt."""
+        summaries = []
+        for i, result in enumerate(agent_results, 1):
+            agent_name = result.metadata.get("agent", f"agent_{i}")
+            content_preview = result.content[:300] + "..." if len(result.content) > 300 else result.content
+            block_count = len(result.blocks)
+            
+            summaries.append(f"""
+Agent {i} ({agent_name}):
+- Content: {content_preview}
+- Blocks: {block_count} block(s)
+- Status: {result.status.value}
+""")
+        
+        return "\n".join(summaries)
+    
+    def _simple_aggregation(self, agent_results: List[AgentResult]) -> AgentResult:
+        """Simple aggregation fallback."""
+        all_content = []
+        all_blocks = []
+        
+        for result in agent_results:
+            agent_name = result.metadata.get("agent", "unknown")
+            all_content.append(f"**{agent_name}:**\n{result.content}")
+            if result.blocks:
+                all_blocks.extend(result.blocks)
+        
+        return AgentResult(
+            content="\n\n".join(all_content),
+            blocks=all_blocks,
+            status=AgentStatus.COMPLETED,
+            metadata={
+                "agent": self.name,
+                "synthesized_from": [r.metadata.get("agent", "unknown") for r in agent_results],
+                "fallback": True
+            }
+        )
+
+
 class EmailGeneratorAgent(BaseAgent):
     """Agent for generating and sending emails with summarization capabilities."""
     
@@ -1446,15 +1820,30 @@ class WorkflowOrchestrator:
             Aggregated AgentResult
         """
         try:
-            # Step 1: Analyze intent and generate workflow plan
+            # Step 1: Use SelectorAgent to analyze intent and generate workflow plan
             await websocket_manager.send_activity_status(
                 conversation_id=conversation_id,
-                activity="Analyzing intent and creating workflow plan...",
-                details={"step": "orchestration", "workflow": "planning"}
+                activity="Selector Agent: Analyzing user intent...",
+                details={"step": "orchestration", "workflow": "planning", "agent": "selector"}
             )
             await asyncio.sleep(0.5)
             
-            agent_plan = await self._select_agents(user_message, conversation_history)
+            selector_agent = self.agents.get("selector")
+            if selector_agent:
+                selector_result = await selector_agent.execute(
+                    user_message=user_message,
+                    conversation_id=conversation_id,
+                    conversation_history=conversation_history,
+                    **kwargs
+                )
+                agent_plan = selector_result.metadata.get("workflow_plan", {})
+                
+                # If selector used fallback, use the fallback method
+                if selector_result.metadata.get("fallback"):
+                    agent_plan = await self._select_agents(user_message, conversation_history)
+            else:
+                # Fallback to direct selection
+                agent_plan = await self._select_agents(user_message, conversation_history)
             
             workflow_type = agent_plan.get("workflow_type", "simple")
             phases = agent_plan.get("phases", [])
@@ -1550,34 +1939,45 @@ class WorkflowOrchestrator:
                     phase_results[f"phase_{phase_num}"] = summary_result
                     all_agent_results.append(summary_result)
             
-            # Step 3: Final aggregation (with or without summarization)
+            # Step 3: Use ResponseBuilderAgent to format final response
             await websocket_manager.send_activity_status(
                 conversation_id=conversation_id,
-                activity="Aggregating final results...",
-                details={"step": "orchestration", "workflow": "final_aggregation"}
+                activity="Response Builder: Formatting final response...",
+                details={"step": "orchestration", "workflow": "response_building", "agent": "response_builder"}
             )
             await asyncio.sleep(0.3)
             
-            # Check if summarization is already done in phases
-            final_result = None
-            if agent_plan.get("summarization", {}).get("required"):
-                # Check if summarization was done in a phase
-                summary_phase_results = [
-                    r for k, r in phase_results.items()
-                    if isinstance(r, AgentResult) and r.metadata.get("summarized")
-                ]
-                
-                if summary_phase_results:
-                    final_result = summary_phase_results[-1]  # Use latest summary
-                else:
-                    # Generate summary now
-                    final_result = await self._generate_summary(
-                        {"agents": [agent_plan.get("summarization", {}).get("agent", "general")]},
-                        phase_results, user_message, conversation_id
-                    )
+            response_builder = self.agents.get("response_builder")
+            if response_builder and all_agent_results:
+                # Use ResponseBuilderAgent to create cohesive response
+                final_result = await response_builder.execute(
+                    user_message=user_message,
+                    conversation_id=conversation_id,
+                    conversation_history=conversation_history,
+                    agent_results=all_agent_results,
+                    **kwargs
+                )
             else:
-                # Simple aggregation
-                final_result = self._aggregate_results(all_agent_results, agent_plan)
+                # Fallback: Check if summarization is already done in phases
+                final_result = None
+                if agent_plan.get("summarization", {}).get("required"):
+                    # Check if summarization was done in a phase
+                    summary_phase_results = [
+                        r for k, r in phase_results.items()
+                        if isinstance(r, AgentResult) and r.metadata.get("summarized")
+                    ]
+                    
+                    if summary_phase_results:
+                        final_result = summary_phase_results[-1]  # Use latest summary
+                    else:
+                        # Generate summary now
+                        final_result = await self._generate_summary(
+                            {"agents": [agent_plan.get("summarization", {}).get("agent", "general")]},
+                            phase_results, user_message, conversation_id
+                        )
+                else:
+                    # Simple aggregation
+                    final_result = self._aggregate_results(all_agent_results, agent_plan)
             
             await websocket_manager.send_activity_status(
                 conversation_id=conversation_id,
