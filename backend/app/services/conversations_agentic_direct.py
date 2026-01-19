@@ -25,7 +25,7 @@ import json
 import re
 import asyncio
 import textwrap
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, AsyncGenerator
 from dataclasses import dataclass
 from enum import Enum
 
@@ -56,6 +56,18 @@ try:
                     AgentConfig, Model, Tool, ask_user, ToolContext,
                     AuthMethod, ModelProvider
                 )
+                # Try to import CustomAgent and types for custom agent implementation
+                try:
+                    from smart_sdk.agents import CustomAgent
+                    from smart_sdk.types import Event, EventActions, InvocationContext
+                    CUSTOM_AGENT_AVAILABLE = True
+                except ImportError:
+                    CUSTOM_AGENT_AVAILABLE = False
+                    CustomAgent = None
+                    Event = None
+                    EventActions = None
+                    InvocationContext = None
+                    print("⚠️ CustomAgent not available. Custom agents in custom_agents.py will not work.")
                 SHARED_FRAMEWORK_AVAILABLE = True
                 print(f"✅ Shared framework (smart_sdk) loaded from: {framework_path}")
                 break
