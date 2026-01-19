@@ -1,7 +1,7 @@
 """
-Direct agent implementation using Google ADK (without agent-toolkit).
+Direct agent implementation using Azure OpenAI (without agent-toolkit).
 
-This module implements agents directly in Python code, using Google ADK for LLM
+This module implements agents directly in Python code, using Azure OpenAI for LLM
 operations and supporting RAG integration with OpenSearch. Each agent sends
 activity status updates via WebSocket for real-time UI feedback.
 
@@ -21,7 +21,7 @@ Shared Framework Support:
     - Structured output support
     - Sub-agent support
     
-    If shared framework is not available, falls back to direct GoogleADKClient usage.
+    If shared framework is not available, falls back to direct AzureOpenAIClient usage.
     
     Example: Using shared framework for an agent:
         from smart_sdk.agents.base_agent import Model, Tool
@@ -52,36 +52,24 @@ from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass
 from enum import Enum
 
-# Google ADK - Direct implementation using Google Generative AI SDK (no agent-toolkit dependency)
+# Azure OpenAI - Direct implementation using Azure OpenAI SDK (no agent-toolkit dependency)
 try:
-    import google.generativeai as genai
-    GOOGLE_GENAI_AVAILABLE = True
+    from azure.identity import CertificateCredential
+    from azure.core.exceptions import ClientAuthenticationError
+    from langchain_openai import AzureChatOpenAI
+    from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+    import configparser
+    AZURE_OPENAI_AVAILABLE = True
 except ImportError:
-    GOOGLE_GENAI_AVAILABLE = False
-    print("⚠️ google-generativeai not available. Install: pip install google-generativeai")
-    genai = None
-
-# Vertex AI (optional)
-try:
-    from google.cloud import aiplatform
-    VERTEX_AI_AVAILABLE = True
-except ImportError:
-    VERTEX_AI_AVAILABLE = False
-    aiplatform = None
-
-# LangChain Google GenAI (optional fallback)
-try:
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    from langchain.schema import HumanMessage, AIMessage, SystemMessage
-    LANGCHAIN_GOOGLE_AVAILABLE = True
-except ImportError:
-    LANGCHAIN_GOOGLE_AVAILABLE = False
-    ChatGoogleGenerativeAI = None
+    AZURE_OPENAI_AVAILABLE = False
+    print("⚠️ Azure OpenAI not available. Install: pip install azure-identity langchain-openai")
+    CertificateCredential = None
+    ClientAuthenticationError = None
+    AzureChatOpenAI = None
     HumanMessage = None
     AIMessage = None
     SystemMessage = None
-
-GOOGLE_ADK_AVAILABLE = GOOGLE_GENAI_AVAILABLE or LANGCHAIN_GOOGLE_AVAILABLE or VERTEX_AI_AVAILABLE
+    configparser = None
 
 # Shared Framework imports (smart_sdk with ADKLlmAgent)
 try:
@@ -123,7 +111,7 @@ try:
             print("✅ Shared framework (smart_sdk) loaded from installed package")
         except ImportError:
             SHARED_FRAMEWORK_AVAILABLE = False
-            print("⚠️ Shared framework (smart_sdk) not available. Using direct GoogleADKClient.")
+            print("⚠️ Shared framework (smart_sdk) not available. Using direct AzureOpenAIClient.")
             
 except Exception as e:
     SHARED_FRAMEWORK_AVAILABLE = False
@@ -147,104 +135,200 @@ USE_SHARED_FRAMEWORK_ENV = os.getenv("USE_SHARED_FRAMEWORK", "false").lower() ==
 
 
 # ============================================================================
-# Google ADK Client - Standalone implementation (no agent-toolkit dependency)
+# Azure OpenAI Client - Standalone implementation (no agent-toolkit dependency)
 # ============================================================================
 
 @dataclass
-class GoogleADKConfig:
-    """Configuration for Google ADK client."""
-    api_key: Optional[str] = None
-    model_name: str = "gemini-pro"
+class AzureOpenAIConfig:
+    """Configuration for Azure OpenAI client."""
+    azure_endpoint: Optional[str] = None
+    deployment_name: str = "gpt-4"
+    openai_api_version: str = "2024-10-21"
+    openai_api_key: Optional[str] = None
     temperature: float = 0.7
     max_tokens: int = 2048
-    top_p: float = 0.95
-    top_k: int = 40
-    use_vertex_ai: bool = False
-    project_id: Optional[str] = None
-    location: str = "us-central1"
-    credentials_path: Optional[str] = None
+    user_sid: str = "default_user"
+    cert_path: Optional[str] = None
+    config_path: Optional[str] = None
+    azure_tenant_id: Optional[str] = None
+    azure_client_id: Optional[str] = None
 
 
-class GoogleADKClient:
-    """Client for Google ADK using Google Generative AI SDK directly (no agent-toolkit)."""
+class TokenManager:
+    """Manages Azure OpenAI access tokens with certificate-based authentication."""
     
-    def __init__(self, config: Optional[GoogleADKConfig] = None):
+    def __init__(self, cert_path: Optional[str] = None, config_path: Optional[str] = None):
+        """Initialize token manager."""
+        self.config = self._load_config(config_path)
+        self.cert_path = cert_path
+        self.config_path = config_path
+        self.access_token = None
+        self._refresh_token()
+    
+    @staticmethod
+    def _load_config(config_path: Optional[str] = None):
+        """Load configuration from config.ini file."""
+        if config_path is None:
+            # Try to find config.ini in common locations
+            current_dir = os.path.dirname(__file__)
+            possible_paths = [
+                os.path.join(current_dir, 'config.ini'),
+                os.path.join(current_dir, '..', 'config.ini'),
+                os.path.join(current_dir, '..', '..', 'config.ini'),
+                os.path.join(os.getcwd(), 'config.ini'),
+            ]
+            for file_path in possible_paths:
+                if os.path.exists(file_path):
+                    config_path = file_path
+                    break
+            else:
+                raise FileNotFoundError(f"Config file not found. Tried: {possible_paths}")
+        else:
+            file_path = config_path
+        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Config file not found: {file_path}")
+        
+        config = configparser.ConfigParser()
+        config.read(file_path)
+        return config
+    
+    def _refresh_token(self):
+        """Refresh the access token."""
+        current_dir = os.path.dirname(__file__)
+        
+        try:
+            if self.cert_path is None:
+                # Try to find certificate in common locations
+                possible_cert_paths = [
+                    os.path.join(current_dir, "..", "..", "discoveryeng.dev.azure.jpmchase.net.pem"),
+                    os.path.join(current_dir, "discoveryeng.dev.azure.jpmchase.net.pem"),
+                    os.path.join(os.path.dirname(current_dir), "discoveryeng.dev.azure.jpmchase.net.pem"),
+                    os.path.join(os.getcwd(), "discoveryeng.dev.azure.jpmchase.net.pem"),
+                ]
+                for cert_path in possible_cert_paths:
+                    if os.path.exists(cert_path):
+                        self.cert_path = cert_path
+                        break
+                else:
+                    raise FileNotFoundError(f"Certificate file not found. Tried: {possible_cert_paths}")
+            
+            if not os.path.exists(self.cert_path):
+                raise FileNotFoundError(f"Certificate file not found: {self.cert_path}")
+            
+            tenant_id = self.config.get('azure_openai', {}).get('azure_tenant_id') or os.getenv('AZURE_TENANT_ID')
+            client_id = self.config.get('azure_openai', {}).get('azure_client_id') or os.getenv('AZURE_CLIENT_ID')
+            
+            if not tenant_id or not client_id:
+                raise ValueError("Azure tenant_id and client_id must be provided in config.ini or environment variables")
+            
+            credential = CertificateCredential(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                certificate_path=self.cert_path
+            )
+            
+            self.access_token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+        except ClientAuthenticationError as e:
+            print(f"⚠️ Azure authentication failed: {e}")
+            self.access_token = None
+        except Exception as e:
+            print(f"⚠️ Error refreshing Azure token: {e}")
+            self.access_token = None
+    
+    def get_token(self) -> Optional[str]:
+        """Get current access token, refreshing if needed."""
+        if not self.access_token:
+            self._refresh_token()
+        return self.access_token
+
+
+class AzureOpenAIClient:
+    """Client for Azure OpenAI using LangChain AzureChatOpenAI (no agent-toolkit dependency)."""
+    
+    def __init__(self, config: Optional[AzureOpenAIConfig] = None):
         """
-        Initialize Google ADK client.
+        Initialize Azure OpenAI client.
         
         Args:
-            config: Configuration for Google ADK
+            config: Configuration for Azure OpenAI
         """
-        self.config = config or GoogleADKConfig()
+        self.config = config or AzureOpenAIConfig()
         
-        # Load API key from environment if not provided
-        if not self.config.api_key:
-            self.config.api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        # Load configuration from environment if not provided
+        if not self.config.azure_endpoint:
+            self.config.azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT") or "https://llm-multitenancy-exp.jpmchase.net/ver2/"
+        if not self.config.openai_api_key:
+            self.config.openai_api_key = os.getenv("AZURE_OPENAI_API_KEY") or "b3d265714de0417cbd8af5c26b6013b1"
+        if not self.config.openai_api_version:
+            self.config.openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION") or "2024-10-21"
+        if not self.config.deployment_name:
+            self.config.deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME") or "gpt-4"
         
-        # Initialize based on configuration
-        self.genai_model = None
-        self.langchain_model = None
-        self.vertex_ai_initialized = False
+        # Initialize token manager for certificate-based authentication
+        self.token_manager = None
+        self.chat_client = None
         
         self._initialize()
     
     def _initialize(self):
-        """Initialize Google ADK clients."""
-        if self.config.use_vertex_ai and VERTEX_AI_AVAILABLE:
-            self._initialize_vertex_ai()
-        elif GOOGLE_GENAI_AVAILABLE and self.config.api_key:
-            self._initialize_generative_ai()
-        elif LANGCHAIN_GOOGLE_AVAILABLE and self.config.api_key:
-            self._initialize_langchain()
-        else:
-            print("⚠️ Google ADK not properly configured. Please set GOOGLE_API_KEY or configure Vertex AI.")
-    
-    def _initialize_generative_ai(self):
-        """Initialize Google Generative AI client."""
-        if not GOOGLE_GENAI_AVAILABLE:
+        """Initialize Azure OpenAI client."""
+        if not AZURE_OPENAI_AVAILABLE:
+            print("⚠️ Azure OpenAI not available. Install: pip install azure-identity langchain-openai")
             return
         
         try:
-            genai.configure(api_key=self.config.api_key)
-            self.genai_model = genai.GenerativeModel(self.config.model_name)
-            print(f"✅ Google Generative AI initialized with model: {self.config.model_name}")
-        except Exception as e:
-            print(f"⚠️ Failed to initialize Google Generative AI: {e}")
-    
-    def _initialize_langchain(self):
-        """Initialize LangChain Google GenAI client."""
-        if not LANGCHAIN_GOOGLE_AVAILABLE:
-            return
-        
-        try:
-            self.langchain_model = ChatGoogleGenerativeAI(
-                model=self.config.model_name,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-                google_api_key=self.config.api_key
-            )
-            print(f"✅ LangChain Google GenAI initialized with model: {self.config.model_name}")
-        except Exception as e:
-            print(f"⚠️ Failed to initialize LangChain Google GenAI: {e}")
-    
-    def _initialize_vertex_ai(self):
-        """Initialize Vertex AI client."""
-        if not VERTEX_AI_AVAILABLE:
-            return
-        
-        try:
-            if self.config.credentials_path:
-                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.config.credentials_path
-            
-            if self.config.project_id:
-                aiplatform.init(
-                    project=self.config.project_id,
-                    location=self.config.location
+            # Initialize token manager if cert_path or config_path provided
+            if self.config.cert_path or self.config.config_path:
+                self.token_manager = TokenManager(
+                    cert_path=self.config.cert_path,
+                    config_path=self.config.config_path
                 )
-                self.vertex_ai_initialized = True
-                print(f"✅ Vertex AI initialized: project={self.config.project_id}, location={self.config.location}")
+            
+            # Refresh client with token
+            self._refresh_client()
+            
+            if self.chat_client:
+                print(f"✅ Azure OpenAI initialized with deployment: {self.config.deployment_name}")
+            else:
+                print("⚠️ Azure OpenAI client not initialized. Check configuration.")
         except Exception as e:
-            print(f"⚠️ Failed to initialize Vertex AI: {e}")
+            print(f"⚠️ Failed to initialize Azure OpenAI: {e}")
+            import traceback
+            print(traceback.format_exc())
+    
+    def _refresh_client(self):
+        """Refresh the chat client with latest token."""
+        if not AZURE_OPENAI_AVAILABLE:
+            return
+        
+        try:
+            # Get access token if token manager is available
+            access_token = None
+            if self.token_manager:
+                access_token = self.token_manager.get_token()
+            
+            # Build default headers
+            default_headers = {}
+            if access_token:
+                default_headers["Authorization"] = f"Bearer {access_token}"
+            default_headers["user_sid"] = self.config.user_sid
+            
+            # Create AzureChatOpenAI client
+            self.chat_client = AzureChatOpenAI(
+                azure_endpoint=self.config.azure_endpoint,
+                openai_api_version=self.config.openai_api_version,
+                deployment_name=self.config.deployment_name,
+                openai_api_key=self.config.openai_api_key,
+                openai_api_type="azure",
+                max_tokens=self.config.max_tokens,
+                temperature=self.config.temperature,
+                streaming=True,
+                default_headers=default_headers
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to refresh Azure OpenAI client: {e}")
+            self.chat_client = None
     
     async def generate_text(
         self,
@@ -254,7 +338,7 @@ class GoogleADKClient:
         stream: bool = False
     ) -> Any:
         """
-        Generate text using Google ADK.
+        Generate text using Azure OpenAI.
         
         Args:
             prompt: User prompt
@@ -265,79 +349,30 @@ class GoogleADKClient:
         Returns:
             Generated text or async iterator for streaming
         """
-        if self.langchain_model:
-            return await self._generate_with_langchain(prompt, system_prompt, context, stream)
-        elif self.genai_model:
-            return await self._generate_with_genai(prompt, system_prompt, context, stream)
-        elif self.vertex_ai_initialized:
-            return await self._generate_with_vertex_ai(prompt, system_prompt, context, stream)
-        else:
-            raise RuntimeError("Google ADK not properly initialized")
+        if not self.chat_client:
+            # Refresh client with latest token
+            self._refresh_client()
+            if not self.chat_client:
+                raise RuntimeError("Azure OpenAI client not properly initialized")
+        
+        return await self._generate_with_azure(prompt, system_prompt, context, stream)
     
-    async def _generate_with_genai(
+    async def _generate_with_azure(
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
         context: Optional[List[Dict[str, str]]] = None,
         stream: bool = False
     ) -> Any:
-        """Generate text using Google Generative AI SDK."""
-        if not self.genai_model:
-            raise RuntimeError("Generative AI model not initialized")
+        """Generate text using Azure OpenAI via LangChain."""
+        if not self.chat_client:
+            raise RuntimeError("Azure OpenAI client not initialized")
         
-        # Build full prompt
-        full_prompt = prompt
-        if system_prompt:
-            full_prompt = f"{system_prompt}\n\n{prompt}"
-        
-        # Add context if provided
-        if context:
-            context_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in context])
-            full_prompt = f"{context_text}\n\n{full_prompt}"
-        
-        # Configure generation parameters
-        generation_config = genai.types.GenerationConfig(
-            temperature=self.config.temperature,
-            max_output_tokens=self.config.max_tokens,
-            top_p=self.config.top_p,
-            top_k=self.config.top_k
-        )
-        
-        if stream:
-            # Return async iterator for streaming
-            async def stream_generator():
-                try:
-                    response = await asyncio.to_thread(
-                        self.genai_model.generate_content,
-                        full_prompt,
-                        generation_config=generation_config,
-                        stream=True
-                    )
-                    for chunk in response:
-                        if hasattr(chunk, 'text') and chunk.text:
-                            yield chunk.text
-                except Exception as e:
-                    raise RuntimeError(f"Error streaming from Generative AI: {e}")
-            return stream_generator()
-        else:
-            # Generate synchronously (run in executor)
-            response = await asyncio.to_thread(
-                self.genai_model.generate_content,
-                full_prompt,
-                generation_config=generation_config
-            )
-            return response.text
-    
-    async def _generate_with_langchain(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        context: Optional[List[Dict[str, str]]] = None,
-        stream: bool = False
-    ) -> Any:
-        """Generate text using LangChain Google GenAI."""
-        if not self.langchain_model:
-            raise RuntimeError("LangChain model not initialized")
+        # Refresh token in headers if token manager is available
+        if self.token_manager:
+            access_token = self.token_manager.get_token()
+            if access_token:
+                self.chat_client.default_headers["Authorization"] = f"Bearer {access_token}"
         
         # Build messages
         messages = []
@@ -347,39 +382,45 @@ class GoogleADKClient:
         # Add context
         if context:
             for msg in context:
-                if msg['role'] == 'user':
-                    messages.append(HumanMessage(content=msg['content']))
-                elif msg['role'] == 'assistant':
-                    messages.append(AIMessage(content=msg['content']))
+                if msg.get('role') == 'user':
+                    messages.append(HumanMessage(content=msg.get('content', '')))
+                elif msg.get('role') == 'assistant':
+                    messages.append(AIMessage(content=msg.get('content', '')))
         
         # Add current prompt
         messages.append(HumanMessage(content=prompt))
         
-        if stream:
-            # Stream response
-            async def stream_generator():
-                async for chunk in self.langchain_model.astream(messages):
-                    if hasattr(chunk, 'content'):
-                        yield chunk.content
-                    else:
-                        yield str(chunk)
-            return stream_generator()
-        else:
-            # Generate response
-            response = await self.langchain_model.ainvoke(messages)
-            return response.content if hasattr(response, 'content') else str(response)
-    
-    async def _generate_with_vertex_ai(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        context: Optional[List[Dict[str, str]]] = None,
-        stream: bool = False
-    ) -> Any:
-        """Generate text using Vertex AI."""
-        # Vertex AI implementation would go here
-        # This is a placeholder - actual implementation depends on Vertex AI API
-        raise NotImplementedError("Vertex AI generation not yet implemented")
+        try:
+            if stream:
+                # Stream response
+                async def stream_generator():
+                    async for chunk in self.chat_client.astream(messages):
+                        if hasattr(chunk, 'content'):
+                            yield chunk.content
+                        else:
+                            yield str(chunk)
+                return stream_generator()
+            else:
+                # Generate response
+                response = await self.chat_client.ainvoke(messages)
+                return response.content if hasattr(response, 'content') else str(response)
+        except Exception as e:
+            # If token expired, refresh and retry once
+            if self.token_manager and "401" in str(e) or "Unauthorized" in str(e):
+                print("⚠️ Token expired, refreshing...")
+                self._refresh_client()
+                if stream:
+                    async def stream_generator():
+                        async for chunk in self.chat_client.astream(messages):
+                            if hasattr(chunk, 'content'):
+                                yield chunk.content
+                            else:
+                                yield str(chunk)
+                    return stream_generator()
+                else:
+                    response = await self.chat_client.ainvoke(messages)
+                    return response.content if hasattr(response, 'content') else str(response)
+            raise
     
     async def chat(
         self,
@@ -388,7 +429,7 @@ class GoogleADKClient:
         stream: bool = False
     ) -> Any:
         """
-        Chat interface for Google ADK.
+        Chat interface for Azure OpenAI.
         
         Args:
             messages: List of messages with "role" and "content"
@@ -678,14 +719,14 @@ class BaseAgent:
     """
     Base class for all agents.
     
-    Supports both direct GoogleADKClient usage and shared framework (smart_sdk) integration.
+    Supports both direct AzureOpenAIClient usage and shared framework (smart_sdk) integration.
     """
     
     def __init__(
         self,
         name: str,
         description: str,
-        google_adk_client: Optional[GoogleADKClient] = None,
+        azure_openai_client: Optional[AzureOpenAIClient] = None,
         use_shared_framework: bool = False,
         shared_config: Optional[SharedAgentConfig] = None,
         system_message: Optional[str] = None,
@@ -698,7 +739,7 @@ class BaseAgent:
         Args:
             name: Agent name
             description: Agent description
-            google_adk_client: Google ADK client instance (for direct mode)
+            azure_openai_client: Azure OpenAI client instance (for direct mode)
             use_shared_framework: Whether to use shared framework (smart_sdk)
             shared_config: Configuration for shared framework
             system_message: System message/instructions for shared framework
@@ -716,8 +757,8 @@ class BaseAgent:
             self._init_shared_framework(model, tools)
             self.adk_client = None  # Not used in shared framework mode
         else:
-            # Use direct GoogleADKClient (existing approach)
-            self.adk_client = google_adk_client
+            # Use direct AzureOpenAIClient (existing approach)
+            self.adk_client = azure_openai_client
             self.shared_agent = None
             self._adk_agent = None
     
@@ -784,7 +825,7 @@ class BaseAgent:
         context: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """
-        Generate text using either shared framework or direct Google ADK client.
+        Generate text using either shared framework or direct Azure OpenAI client.
         
         Args:
             prompt: User prompt
@@ -804,7 +845,7 @@ class BaseAgent:
         else:
             # Use direct GoogleADKClient (existing approach)
             if not self.adk_client:
-                raise RuntimeError("Google ADK client not initialized")
+                raise RuntimeError("Azure OpenAI client not initialized")
             
             return await self.adk_client.generate_text(
                 prompt=prompt,
@@ -819,7 +860,7 @@ class BaseAgent:
         system_prompt: Optional[str] = None
     ) -> str:
         """
-        Chat with LLM using either shared framework or direct Google ADK client.
+        Chat with LLM using either shared framework or direct Azure OpenAI client.
         
         Args:
             messages: List of message dicts with 'role' and 'content'
@@ -837,7 +878,7 @@ class BaseAgent:
         else:
             # Use direct GoogleADKClient
             if not self.adk_client:
-                raise RuntimeError("Google ADK client not initialized")
+                raise RuntimeError("Azure OpenAI client not initialized")
             
             return await self.adk_client.chat(
                 messages=messages,
@@ -849,11 +890,11 @@ class BaseAgent:
 class CodeSearchRAGAgent(BaseAgent):
     """Agent that searches code repository using RAG and generates responses."""
     
-    def __init__(self, google_adk_client: Optional[GoogleADKClient] = None):
+    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
         super().__init__(
             name="code_search_rag",
             description="Searches code repository using RAG with OpenSearch",
-            google_adk_client=google_adk_client
+            azure_openai_client=azure_openai_client
         )
     
     async def execute(
@@ -1127,11 +1168,11 @@ Code:
 class SplunkAgent(BaseAgent):
     """Agent for Splunk queries and observability."""
     
-    def __init__(self, google_adk_client: Optional[GoogleADKClient] = None):
+    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
         super().__init__(
             name="splunk",
             description="Handles Splunk queries, log analysis, and observability questions",
-            google_adk_client=google_adk_client
+            azure_openai_client=azure_openai_client
         )
     
     async def execute(
@@ -1232,11 +1273,11 @@ class SplunkAgent(BaseAgent):
 class GeneralAgent(BaseAgent):
     """General purpose agent for conversations."""
     
-    def __init__(self, google_adk_client: Optional[GoogleADKClient] = None):
+    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
         super().__init__(
             name="general",
             description="Handles general questions and conversations",
-            google_adk_client=google_adk_client
+            azure_openai_client=azure_openai_client
         )
     
     async def execute(
@@ -1297,11 +1338,11 @@ class GeneralAgent(BaseAgent):
 class SelectorAgent(BaseAgent):
     """Agent that analyzes user intent and selects appropriate specialized agents."""
     
-    def __init__(self, google_adk_client: Optional[GoogleADKClient] = None):
+    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
         super().__init__(
             name="selector",
             description="Analyzes user intent and selects appropriate specialized agents",
-            google_adk_client=google_adk_client
+            azure_openai_client=azure_openai_client
         )
         self.available_agents = {
             "code_search_rag": "For code repository search, API documentation, code questions (uses RAG)",
@@ -1486,11 +1527,11 @@ class SelectorAgent(BaseAgent):
 class ResponseBuilderAgent(BaseAgent):
     """Agent that formats and builds cohesive responses from multiple agent results."""
     
-    def __init__(self, google_adk_client: Optional[GoogleADKClient] = None):
+    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
         super().__init__(
             name="response_builder",
             description="Formats and builds cohesive responses from multiple agent results",
-            google_adk_client=google_adk_client
+            azure_openai_client=azure_openai_client
         )
     
     async def execute(
@@ -1671,11 +1712,11 @@ Agent {i} ({agent_name}):
 class EmailGeneratorAgent(BaseAgent):
     """Agent for generating and sending emails with summarization capabilities."""
     
-    def __init__(self, google_adk_client: Optional[GoogleADKClient] = None):
+    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
         super().__init__(
             name="email_generator",
             description="Generates and sends emails with summarization and content generation",
-            google_adk_client=google_adk_client
+            azure_openai_client=azure_openai_client
         )
     
     async def execute(
@@ -2031,7 +2072,7 @@ class WorkflowOrchestrator:
     """
     Orchestrates workflow by selecting and executing appropriate agents.
     
-    Supports both direct GoogleADKClient and shared framework (smart_sdk) modes.
+    Supports both direct AzureOpenAIClient and shared framework (smart_sdk) modes.
     To enable shared framework for agents:
     1. Set USE_SHARED_FRAMEWORK=true environment variable
     2. Ensure smart_sdk is installed/available
@@ -2040,17 +2081,17 @@ class WorkflowOrchestrator:
     
     def __init__(
         self,
-        google_adk_client: Optional[GoogleADKClient] = None,
+        azure_openai_client: Optional[AzureOpenAIClient] = None,
         use_shared_framework: Optional[bool] = None
     ):
         """
         Initialize orchestrator with available agents.
         
         Args:
-            google_adk_client: Google ADK client instance (for direct mode)
+            azure_openai_client: Azure OpenAI client instance (for direct mode)
             use_shared_framework: Whether to use shared framework (None = auto-detect from env)
         """
-        self.adk_client = google_adk_client
+        self.adk_client = azure_openai_client
         
         # Determine if shared framework should be used
         if use_shared_framework is None:
@@ -2060,10 +2101,10 @@ class WorkflowOrchestrator:
         # For now, agents use direct client, but can be updated to use shared framework
         # by passing use_shared_framework=True and appropriate config
         self.agents = {
-            "code_search_rag": CodeSearchRAGAgent(google_adk_client),
-            "splunk": SplunkAgent(google_adk_client),
-            "general": GeneralAgent(google_adk_client),
-            "email_generator": EmailGeneratorAgent(google_adk_client),
+            "code_search_rag": CodeSearchRAGAgent(azure_openai_client),
+            "splunk": SplunkAgent(azure_openai_client),
+            "general": GeneralAgent(azure_openai_client),
+            "email_generator": EmailGeneratorAgent(azure_openai_client),
         }
         
         # Log framework mode
@@ -2071,7 +2112,7 @@ class WorkflowOrchestrator:
             print("✅ WorkflowOrchestrator: Shared framework (smart_sdk) available")
             print("   Note: Agents can be configured to use shared framework via BaseAgent.__init__")
         else:
-            print("ℹ️  WorkflowOrchestrator: Using direct GoogleADKClient mode")
+            print("ℹ️  WorkflowOrchestrator: Using direct AzureOpenAIClient mode")
     
     async def orchestrate(
         self,
@@ -3136,36 +3177,66 @@ Return ONLY valid JSON, no markdown formatting, no code blocks, just the raw JSO
 
 # Global instances
 _orchestrator_instance: Optional[WorkflowOrchestrator] = None
-_adk_client_instance: Optional[GoogleADKClient] = None
+_adk_client_instance: Optional[AzureOpenAIClient] = None
 
 
-def _initialize_google_adk() -> Optional[GoogleADKClient]:
-    """Initialize Google ADK client."""
+def _initialize_azure_openai() -> Optional[AzureOpenAIClient]:
+    """Initialize Azure OpenAI client."""
     global _adk_client_instance
     
     if _adk_client_instance:
         return _adk_client_instance
     
-    if not GOOGLE_ADK_AVAILABLE:
+    if not AZURE_OPENAI_AVAILABLE:
         return None
     
     try:
-        config = GoogleADKConfig(
-            api_key=os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"),
-            model_name=os.getenv("GOOGLE_MODEL", "gemini-pro"),
-            temperature=float(os.getenv("GOOGLE_TEMPERATURE", "0.7")),
-            max_tokens=int(os.getenv("GOOGLE_MAX_TOKENS", "2048")),
-            use_vertex_ai=os.getenv("GOOGLE_USE_VERTEX_AI", "false").lower() == "true",
-            project_id=os.getenv("GOOGLE_PROJECT_ID"),
-            location=os.getenv("GOOGLE_LOCATION", "us-central1"),
-            credentials_path=os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        # Try to find config.ini and cert path
+        current_dir = os.path.dirname(__file__)
+        config_path = None
+        cert_path = None
+        
+        # Look for config.ini
+        possible_config_paths = [
+            os.path.join(current_dir, 'config.ini'),
+            os.path.join(current_dir, '..', 'config.ini'),
+            os.path.join(current_dir, '..', '..', 'config.ini'),
+            os.path.join(os.getcwd(), 'config.ini'),
+        ]
+        for path in possible_config_paths:
+            if os.path.exists(path):
+                config_path = path
+                break
+        
+        # Look for certificate
+        possible_cert_paths = [
+            os.path.join(current_dir, "..", "..", "discoveryeng.dev.azure.jpmchase.net.pem"),
+            os.path.join(current_dir, "discoveryeng.dev.azure.jpmchase.net.pem"),
+            os.path.join(os.path.dirname(current_dir), "discoveryeng.dev.azure.jpmchase.net.pem"),
+            os.path.join(os.getcwd(), "discoveryeng.dev.azure.jpmchase.net.pem"),
+        ]
+        for path in possible_cert_paths:
+            if os.path.exists(path):
+                cert_path = path
+                break
+        
+        config = AzureOpenAIConfig(
+            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT") or "https://llm-multitenancy-exp.jpmchase.net/ver2/",
+            deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4"),
+            openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21"),
+            openai_api_key=os.getenv("AZURE_OPENAI_API_KEY") or "b3d265714de0417cbd8af5c26b6013b1",
+            temperature=float(os.getenv("AZURE_OPENAI_TEMPERATURE", "0.7")),
+            max_tokens=int(os.getenv("AZURE_OPENAI_MAX_TOKENS", "2048")),
+            user_sid=os.getenv("AZURE_USER_SID", "default_user"),
+            cert_path=cert_path,
+            config_path=config_path
         )
         
-        _adk_client_instance = GoogleADKClient(config=config)
-        print("✅ Google ADK client initialized for direct agents")
+        _adk_client_instance = AzureOpenAIClient(config=config)
+        print("✅ Azure OpenAI client initialized for direct agents")
         return _adk_client_instance
     except Exception as e:
-        print(f"⚠️ Failed to initialize Google ADK: {e}")
+        print(f"⚠️ Failed to initialize Azure OpenAI: {e}")
         import traceback
         print(traceback.format_exc())
         return None
@@ -3201,20 +3272,20 @@ async def process_conversation_agentic_direct(
     global _orchestrator_instance
     
     try:
-        # Initialize Google ADK
-        adk_client = _initialize_google_adk()
+        # Initialize Azure OpenAI
+        adk_client = _initialize_azure_openai()
         if not adk_client:
             return {
-                "content": "Google ADK not available. Please configure GOOGLE_API_KEY.",
+                "content": "Azure OpenAI not available. Please configure Azure OpenAI settings.",
                 "blocks": [],
-                "error": "Google ADK not available",
+                "error": "Azure OpenAI not available",
                 "thinking_mode": thinking_mode,
                 "agent": agent
             }
         
         # Initialize orchestrator if needed
         if _orchestrator_instance is None:
-            _orchestrator_instance = WorkflowOrchestrator(google_adk_client=adk_client)
+            _orchestrator_instance = WorkflowOrchestrator(azure_openai_client=adk_client)
         
         # Broadcast activity: Starting
         await websocket_manager.send_activity_status(
