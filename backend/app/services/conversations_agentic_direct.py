@@ -1,46 +1,23 @@
 """
-Direct agent implementation using Azure OpenAI (without agent-toolkit).
+Direct agent implementation using Google ADK (ADKLlmAgent) with Azure OpenAI models.
 
-This module implements agents directly in Python code, using Azure OpenAI for LLM
-operations and supporting RAG integration with OpenSearch. Each agent sends
-activity status updates via WebSocket for real-time UI feedback.
+This module implements agents using Google ADK's LlmAgent (ADKLlmAgent) with Azure OpenAI
+models configured via smart_sdk's Model class. Each agent sends activity status updates
+via WebSocket for real-time UI feedback.
 
-Shared Framework Support:
-    This module now supports using the shared framework (smart_sdk) that wraps
-    ADKLlmAgent from google.adk.agents. To enable:
+Requirements:
+    - smart_sdk must be installed or available in the path
+    - google.adk.agents.LlmAgent (ADKLlmAgent) must be available
+    - Model, AuthMethod, ModelProvider from smart_sdk.agents.base_agent
     
-    1. Set environment variable: USE_SHARED_FRAMEWORK=true
-    2. Ensure smart_sdk is installed or available in the path
-    3. Configure shared framework settings via SharedAgentConfig
-    
-    The shared framework provides:
-    - Built-in memory support
-    - Human-in-the-loop with ask_user tool
-    - Advanced tool management (tool_choice)
-    - Reflection on tool use
-    - Structured output support
-    - Sub-agent support
-    
-    If shared framework is not available, falls back to direct AzureOpenAIClient usage.
-    
-    Example: Using shared framework for an agent:
-        from smart_sdk.agents.base_agent import Model, Tool
+    Example: Using ADKLlmAgent with Azure OpenAI model:
+        from smart_sdk.agents.base_agent import Model, AuthMethod, ModelProvider
         
-        # Create shared config
-        shared_config = SharedAgentConfig(
-            human_in_the_loop=True,
-            use_memory=True,
-            tool_choice="auto"
-        )
+        # Create Azure OpenAI model configuration
+        model = get_model()  # Uses certificate-based auth
         
-        # Initialize agent with shared framework
-        agent = EmailGeneratorAgent(
-            use_shared_framework=True,
-            shared_config=shared_config,
-            system_message="You are an expert email writer.",
-            model=Model(...),  # From smart_sdk
-            tools=[...]  # List of Tool from smart_sdk
-        )
+        # Initialize agent with ADKLlmAgent
+        agent = CodeSearchRAGAgent(model=model)
 """
 
 import os
@@ -52,26 +29,7 @@ from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass
 from enum import Enum
 
-# Azure OpenAI - Direct implementation using Azure OpenAI SDK (no agent-toolkit dependency)
-try:
-    from azure.identity import CertificateCredential
-    from azure.core.exceptions import ClientAuthenticationError
-    from langchain_openai import AzureChatOpenAI
-    from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-    import configparser
-    AZURE_OPENAI_AVAILABLE = True
-except ImportError:
-    AZURE_OPENAI_AVAILABLE = False
-    print("⚠️ Azure OpenAI not available. Install: pip install azure-identity langchain-openai")
-    CertificateCredential = None
-    ClientAuthenticationError = None
-    AzureChatOpenAI = None
-    HumanMessage = None
-    AIMessage = None
-    SystemMessage = None
-    configparser = None
-
-# Shared Framework imports (smart_sdk with ADKLlmAgent)
+# Shared Framework imports (smart_sdk with ADKLlmAgent) - REQUIRED
 try:
     import sys
     from pathlib import Path
@@ -94,11 +52,15 @@ try:
             try:
                 from google.adk.agents import LlmAgent as ADKLlmAgent
                 from smart_sdk.agents.base_agent import BaseAgent as SharedBaseAgent
-                from smart_sdk.agents.base_agent import AgentConfig, Model, Tool, ask_user, ToolContext
+                from smart_sdk.agents.base_agent import (
+                    AgentConfig, Model, Tool, ask_user, ToolContext,
+                    AuthMethod, ModelProvider
+                )
                 SHARED_FRAMEWORK_AVAILABLE = True
                 print(f"✅ Shared framework (smart_sdk) loaded from: {framework_path}")
                 break
-            except ImportError:
+            except ImportError as e:
+                print(f"⚠️ Failed to import from {framework_path}: {e}")
                 continue
     
     if not SHARED_FRAMEWORK_AVAILABLE:
@@ -106,353 +68,119 @@ try:
         try:
             from google.adk.agents import LlmAgent as ADKLlmAgent
             from smart_sdk.agents.base_agent import BaseAgent as SharedBaseAgent
-            from smart_sdk.agents.base_agent import AgentConfig, Model, Tool, ask_user, ToolContext
+            from smart_sdk.agents.base_agent import (
+                AgentConfig, Model, Tool, ask_user, ToolContext,
+                AuthMethod, ModelProvider
+            )
             SHARED_FRAMEWORK_AVAILABLE = True
             print("✅ Shared framework (smart_sdk) loaded from installed package")
-        except ImportError:
+        except ImportError as e:
             SHARED_FRAMEWORK_AVAILABLE = False
-            print("⚠️ Shared framework (smart_sdk) not available. Using direct AzureOpenAIClient.")
+            print(f"❌ Shared framework (smart_sdk) not available: {e}")
+            print("   This module requires smart_sdk and google.adk.agents to be installed.")
+            raise ImportError("smart_sdk and google.adk.agents are required for this module")
             
 except Exception as e:
     SHARED_FRAMEWORK_AVAILABLE = False
-    print(f"⚠️ Shared framework not available: {e}")
-    ADKLlmAgent = None
-    SharedBaseAgent = None
-    AgentConfig = None
-    Model = None
-    Tool = None
-    ask_user = None
-    ToolContext = None
+    print(f"❌ Shared framework not available: {e}")
+    raise ImportError(f"Failed to load shared framework: {e}")
+
+# Ensure required imports are available
+if not SHARED_FRAMEWORK_AVAILABLE:
+    raise RuntimeError("Shared framework (smart_sdk) is required but not available")
 
 from app.services.websocket_manager import websocket_manager
 from app.services.opensearch_service import opensearch_service
 from app.services.approval_manager import approval_manager
 from app.core.config import settings
 import uuid
-
-# Environment variable to enable shared framework
-USE_SHARED_FRAMEWORK_ENV = os.getenv("USE_SHARED_FRAMEWORK", "false").lower() == "true"
-
+import configparser
 
 # ============================================================================
-# Azure OpenAI Client - Standalone implementation (no agent-toolkit dependency)
+# Model Configuration - Azure OpenAI with Certificate Authentication
 # ============================================================================
 
-@dataclass
-class AzureOpenAIConfig:
-    """Configuration for Azure OpenAI client."""
-    azure_endpoint: Optional[str] = None
-    deployment_name: str = "gpt-4"
-    openai_api_version: str = "2024-10-21"
-    openai_api_key: Optional[str] = None
-    temperature: float = 0.7
-    max_tokens: int = 2048
-    user_sid: str = "default_user"
-    cert_path: Optional[str] = None
-    config_path: Optional[str] = None
-    azure_tenant_id: Optional[str] = None
-    azure_client_id: Optional[str] = None
-
-
-class TokenManager:
-    """Manages Azure OpenAI access tokens with certificate-based authentication."""
+def get_model() -> Model:
+    """
+    Get Azure OpenAI model configuration using certificate-based authentication.
     
-    def __init__(self, cert_path: Optional[str] = None, config_path: Optional[str] = None):
-        """Initialize token manager."""
-        self.config = self._load_config(config_path)
-        self.cert_path = cert_path
-        self.config_path = config_path
-        self.access_token = None
-        self._refresh_token()
+    Returns:
+        Model instance configured for Azure OpenAI with certificate auth
+        
+    Raises:
+        FileNotFoundError: If config.ini or certificate file not found
+        ValueError: If required configuration values are missing
+    """
+    current_dir = os.path.dirname(__file__)
     
-    @staticmethod
-    def _load_config(config_path: Optional[str] = None):
-        """Load configuration from config.ini file."""
-        if config_path is None:
-            # Try to find config.ini in common locations
-            current_dir = os.path.dirname(__file__)
-            possible_paths = [
-                os.path.join(current_dir, 'config.ini'),
-                os.path.join(current_dir, '..', 'config.ini'),
-                os.path.join(current_dir, '..', '..', 'config.ini'),
-                os.path.join(os.getcwd(), 'config.ini'),
-            ]
-            for file_path in possible_paths:
-                if os.path.exists(file_path):
-                    config_path = file_path
-                    break
-            else:
-                raise FileNotFoundError(f"Config file not found. Tried: {possible_paths}")
-        else:
-            file_path = config_path
-        
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Config file not found: {file_path}")
-        
-        config = configparser.ConfigParser()
-        config.read(file_path)
-        return config
+    # Find certificate path
+    possible_cert_paths = [
+        os.path.join(current_dir, "..", "..", "discoveryeng.dev.azure.jpmchase.net.pem"),
+        os.path.join(current_dir, "discoveryeng.dev.azure.jpmchase.net.pem"),
+        os.path.join(os.path.dirname(current_dir), "discoveryeng.dev.azure.jpmchase.net.pem"),
+        os.path.join(os.getcwd(), "discoveryeng.dev.azure.jpmchase.net.pem"),
+    ]
     
-    def _refresh_token(self):
-        """Refresh the access token."""
-        current_dir = os.path.dirname(__file__)
-        
-        try:
-            if self.cert_path is None:
-                # Try to find certificate in common locations
-                possible_cert_paths = [
-                    os.path.join(current_dir, "..", "..", "discoveryeng.dev.azure.jpmchase.net.pem"),
-                    os.path.join(current_dir, "discoveryeng.dev.azure.jpmchase.net.pem"),
-                    os.path.join(os.path.dirname(current_dir), "discoveryeng.dev.azure.jpmchase.net.pem"),
-                    os.path.join(os.getcwd(), "discoveryeng.dev.azure.jpmchase.net.pem"),
-                ]
-                for cert_path in possible_cert_paths:
-                    if os.path.exists(cert_path):
-                        self.cert_path = cert_path
-                        break
-                else:
-                    raise FileNotFoundError(f"Certificate file not found. Tried: {possible_cert_paths}")
-            
-            if not os.path.exists(self.cert_path):
-                raise FileNotFoundError(f"Certificate file not found: {self.cert_path}")
-            
-            tenant_id = self.config.get('azure_openai', {}).get('azure_tenant_id') or os.getenv('AZURE_TENANT_ID')
-            client_id = self.config.get('azure_openai', {}).get('azure_client_id') or os.getenv('AZURE_CLIENT_ID')
-            
-            if not tenant_id or not client_id:
-                raise ValueError("Azure tenant_id and client_id must be provided in config.ini or environment variables")
-            
-            credential = CertificateCredential(
-                tenant_id=tenant_id,
-                client_id=client_id,
-                certificate_path=self.cert_path
-            )
-            
-            self.access_token = credential.get_token("https://cognitiveservices.azure.com/.default").token
-        except ClientAuthenticationError as e:
-            print(f"⚠️ Azure authentication failed: {e}")
-            self.access_token = None
-        except Exception as e:
-            print(f"⚠️ Error refreshing Azure token: {e}")
-            self.access_token = None
+    certificate_path = None
+    for cert_path in possible_cert_paths:
+        if os.path.exists(cert_path):
+            certificate_path = cert_path
+            break
     
-    def get_token(self) -> Optional[str]:
-        """Get current access token, refreshing if needed."""
-        if not self.access_token:
-            self._refresh_token()
-        return self.access_token
-
-
-class AzureOpenAIClient:
-    """Client for Azure OpenAI using LangChain AzureChatOpenAI (no agent-toolkit dependency)."""
+    if not certificate_path:
+        raise FileNotFoundError(f"Certificate file not found. Tried: {possible_cert_paths}")
     
-    def __init__(self, config: Optional[AzureOpenAIConfig] = None):
-        """
-        Initialize Azure OpenAI client.
-        
-        Args:
-            config: Configuration for Azure OpenAI
-        """
-        self.config = config or AzureOpenAIConfig()
-        
-        # Load configuration from environment if not provided
-        if not self.config.azure_endpoint:
-            self.config.azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT") or "https://llm-multitenancy-exp.jpmchase.net/ver2/"
-        if not self.config.openai_api_key:
-            self.config.openai_api_key = os.getenv("AZURE_OPENAI_API_KEY") or "b3d265714de0417cbd8af5c26b6013b1"
-        if not self.config.openai_api_version:
-            self.config.openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION") or "2024-10-21"
-        if not self.config.deployment_name:
-            self.config.deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME") or "gpt-4"
-        
-        # Initialize token manager for certificate-based authentication
-        self.token_manager = None
-        self.chat_client = None
-        
-        self._initialize()
+    # Find and load config.ini
+    possible_config_paths = [
+        os.path.join(current_dir, 'config.ini'),
+        os.path.join(current_dir, '..', 'config.ini'),
+        os.path.join(current_dir, '..', '..', 'config.ini'),
+        os.path.join(os.getcwd(), 'config.ini'),
+    ]
     
-    def _initialize(self):
-        """Initialize Azure OpenAI client."""
-        if not AZURE_OPENAI_AVAILABLE:
-            print("⚠️ Azure OpenAI not available. Install: pip install azure-identity langchain-openai")
-            return
-        
-        try:
-            # Initialize token manager if cert_path or config_path provided
-            if self.config.cert_path or self.config.config_path:
-                self.token_manager = TokenManager(
-                    cert_path=self.config.cert_path,
-                    config_path=self.config.config_path
-                )
-            
-            # Refresh client with token
-            self._refresh_client()
-            
-            if self.chat_client:
-                print(f"✅ Azure OpenAI initialized with deployment: {self.config.deployment_name}")
-            else:
-                print("⚠️ Azure OpenAI client not initialized. Check configuration.")
-        except Exception as e:
-            print(f"⚠️ Failed to initialize Azure OpenAI: {e}")
-            import traceback
-            print(traceback.format_exc())
+    config_path = None
+    for path in possible_config_paths:
+        if os.path.exists(path):
+            config_path = path
+            break
     
-    def _refresh_client(self):
-        """Refresh the chat client with latest token."""
-        if not AZURE_OPENAI_AVAILABLE:
-            return
-        
-        try:
-            # Get access token if token manager is available
-            access_token = None
-            if self.token_manager:
-                access_token = self.token_manager.get_token()
-            
-            # Build default headers
-            default_headers = {}
-            if access_token:
-                default_headers["Authorization"] = f"Bearer {access_token}"
-            default_headers["user_sid"] = self.config.user_sid
-            
-            # Create AzureChatOpenAI client
-            self.chat_client = AzureChatOpenAI(
-                azure_endpoint=self.config.azure_endpoint,
-                openai_api_version=self.config.openai_api_version,
-                deployment_name=self.config.deployment_name,
-                openai_api_key=self.config.openai_api_key,
-                openai_api_type="azure",
-                max_tokens=self.config.max_tokens,
-                temperature=self.config.temperature,
-                streaming=True,
-                default_headers=default_headers
-            )
-        except Exception as e:
-            print(f"⚠️ Failed to refresh Azure OpenAI client: {e}")
-            self.chat_client = None
+    if not config_path:
+        raise FileNotFoundError(f"Config file not found. Tried: {possible_config_paths}")
     
-    async def generate_text(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        context: Optional[List[Dict[str, str]]] = None,
-        stream: bool = False
-    ) -> Any:
-        """
-        Generate text using Azure OpenAI.
-        
-        Args:
-            prompt: User prompt
-            system_prompt: System prompt/instructions
-            context: Conversation context (list of {"role": "user/assistant", "content": "..."})
-            stream: Whether to stream the response
-            
-        Returns:
-            Generated text or async iterator for streaming
-        """
-        if not self.chat_client:
-            # Refresh client with latest token
-            self._refresh_client()
-            if not self.chat_client:
-                raise RuntimeError("Azure OpenAI client not properly initialized")
-        
-        return await self._generate_with_azure(prompt, system_prompt, context, stream)
+    config = configparser.ConfigParser()
+    config.read(config_path)
     
-    async def _generate_with_azure(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        context: Optional[List[Dict[str, str]]] = None,
-        stream: bool = False
-    ) -> Any:
-        """Generate text using Azure OpenAI via LangChain."""
-        if not self.chat_client:
-            raise RuntimeError("Azure OpenAI client not initialized")
-        
-        # Refresh token in headers if token manager is available
-        if self.token_manager:
-            access_token = self.token_manager.get_token()
-            if access_token:
-                self.chat_client.default_headers["Authorization"] = f"Bearer {access_token}"
-        
-        # Build messages
-        messages = []
-        if system_prompt:
-            messages.append(SystemMessage(content=system_prompt))
-        
-        # Add context
-        if context:
-            for msg in context:
-                if msg.get('role') == 'user':
-                    messages.append(HumanMessage(content=msg.get('content', '')))
-                elif msg.get('role') == 'assistant':
-                    messages.append(AIMessage(content=msg.get('content', '')))
-        
-        # Add current prompt
-        messages.append(HumanMessage(content=prompt))
-        
-        try:
-            if stream:
-                # Stream response
-                async def stream_generator():
-                    async for chunk in self.chat_client.astream(messages):
-                        if hasattr(chunk, 'content'):
-                            yield chunk.content
-                        else:
-                            yield str(chunk)
-                return stream_generator()
-            else:
-                # Generate response
-                response = await self.chat_client.ainvoke(messages)
-                return response.content if hasattr(response, 'content') else str(response)
-        except Exception as e:
-            # If token expired, refresh and retry once
-            if self.token_manager and "401" in str(e) or "Unauthorized" in str(e):
-                print("⚠️ Token expired, refreshing...")
-                self._refresh_client()
-                if stream:
-                    async def stream_generator():
-                        async for chunk in self.chat_client.astream(messages):
-                            if hasattr(chunk, 'content'):
-                                yield chunk.content
-                            else:
-                                yield str(chunk)
-                    return stream_generator()
-                else:
-                    response = await self.chat_client.ainvoke(messages)
-                    return response.content if hasattr(response, 'content') else str(response)
-            raise
+    # Get Azure OpenAI configuration
+    azure_config = config.get('azure_openai', {})
     
-    async def chat(
-        self,
-        messages: List[Dict[str, str]],
-        system_prompt: Optional[str] = None,
-        stream: bool = False
-    ) -> Any:
-        """
-        Chat interface for Azure OpenAI.
-        
-        Args:
-            messages: List of messages with "role" and "content"
-            system_prompt: System prompt/instructions
-            stream: Whether to stream the response
-            
-        Returns:
-            Response text or async iterator
-        """
-        # Extract last user message
-        user_messages = [msg for msg in messages if msg.get('role') == 'user']
-        if not user_messages:
-            raise ValueError("No user messages found")
-        
-        prompt = user_messages[-1]['content']
-        context = messages[:-1] if len(messages) > 1 else None
-        
-        return await self.generate_text(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            context=context,
-            stream=stream
-        )
+    # Extract configuration values
+    model_name = os.getenv("AZURE_OPENAI_MODEL_NAME") or azure_config.get('model_name', 'gpt-4.1-2025-04-14')
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT") or azure_config.get('azure_endpoint', 'https://llm-multitenancy-exp.jpmchase.net/ver2/')
+    azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION") or azure_config.get('azure_api_version', '2024-10-21')
+    azure_deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME") or azure_config.get('deployment_name', model_name)
+    api_key = os.getenv("AZURE_OPENAI_API_KEY") or azure_config.get('openai_api_key', 'b3d265714de0417cbd8af5c26b6013b1')
+    tenant_id = os.getenv("AZURE_TENANT_ID") or azure_config.get('azure_tenant_id')
+    client_id = os.getenv("AZURE_CLIENT_ID") or azure_config.get('azure_client_id')
+    
+    if not tenant_id or not client_id:
+        raise ValueError("Azure tenant_id and client_id must be provided in config.ini or environment variables")
+    
+    # Create and return Model instance
+    model = Model(
+        name=model_name,
+        auth_method=AuthMethod.CERTIFICATE,
+        provider=ModelProvider.AZURE_OPENAI,
+        azure_endpoint=azure_endpoint,
+        azure_api_version=azure_api_version,
+        azure_deployment_name=azure_deployment_name,
+        api_key=api_key,
+        certificate_path=certificate_path,
+        tenant_id=tenant_id,
+        client_id=client_id
+    )
+    
+    print(f"✅ Azure OpenAI model configured: {model_name} (deployment: {azure_deployment_name})")
+    return model
 
 
 class AgentStatus(Enum):
@@ -490,6 +218,10 @@ class SharedAgentConfig:
     tool_choice: str = "auto"  # 'required', 'auto', 'none', or tool name
     generation_config: Optional[Dict[str, Any]] = None
 
+
+# ============================================================================
+# Shared Framework Agent Wrapper (using ADKLlmAgent)
+# ============================================================================
 
 class SharedFrameworkAgentWrapper:
     """
@@ -717,20 +449,18 @@ class SharedFrameworkAgentWrapper:
 
 class BaseAgent:
     """
-    Base class for all agents.
+    Base class for all agents using ADKLlmAgent (Google ADK).
     
-    Supports both direct AzureOpenAIClient usage and shared framework (smart_sdk) integration.
+    All agents use ADKLlmAgent with Azure OpenAI models configured via smart_sdk's Model class.
     """
     
     def __init__(
         self,
         name: str,
         description: str,
-        azure_openai_client: Optional[AzureOpenAIClient] = None,
-        use_shared_framework: bool = False,
+        model: Optional[Model] = None,
         shared_config: Optional[SharedAgentConfig] = None,
         system_message: Optional[str] = None,
-        model: Optional[Any] = None,  # Model from smart_sdk
         tools: Optional[List[Any]] = None  # List of Tool from smart_sdk
     ):
         """
@@ -739,37 +469,25 @@ class BaseAgent:
         Args:
             name: Agent name
             description: Agent description
-            azure_openai_client: Azure OpenAI client instance (for direct mode)
-            use_shared_framework: Whether to use shared framework (smart_sdk)
+            model: Model instance from smart_sdk (required)
             shared_config: Configuration for shared framework
-            system_message: System message/instructions for shared framework
-            model: Model instance from smart_sdk (for shared framework)
-            tools: List of Tool instances from smart_sdk (for shared framework)
+            system_message: System message/instructions
+            tools: List of Tool instances from smart_sdk
         """
+        if not SHARED_FRAMEWORK_AVAILABLE:
+            raise RuntimeError("Shared framework (smart_sdk) is required but not available")
+        
+        if model is None:
+            # Use default model from get_model()
+            model = get_model()
+        
         self.name = name
         self.description = description
-        self.use_shared_framework = use_shared_framework and SHARED_FRAMEWORK_AVAILABLE
         self.shared_config = shared_config or SharedAgentConfig()
         self.system_message = system_message or description
+        self.model = model
         
-        if self.use_shared_framework:
-            # Initialize shared framework agent
-            self._init_shared_framework(model, tools)
-            self.adk_client = None  # Not used in shared framework mode
-        else:
-            # Use direct AzureOpenAIClient (existing approach)
-            self.adk_client = azure_openai_client
-            self.shared_agent = None
-            self._adk_agent = None
-    
-    def _init_shared_framework(self, model: Optional[Any], tools: Optional[List[Any]]):
-        """Initialize shared framework agent wrapper."""
-        if not SHARED_FRAMEWORK_AVAILABLE:
-            raise RuntimeError(
-                "Shared framework not available. Set use_shared_framework=False or install smart_sdk."
-            )
-        
-        # Create shared framework agent instance
+        # Initialize shared framework agent wrapper
         self.shared_agent = SharedFrameworkAgentWrapper(
             name=self.name,
             description=self.description,
@@ -825,7 +543,7 @@ class BaseAgent:
         context: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """
-        Generate text using either shared framework or direct Azure OpenAI client.
+        Generate text using ADKLlmAgent (shared framework).
         
         Args:
             prompt: User prompt
@@ -835,24 +553,11 @@ class BaseAgent:
         Returns:
             Generated text response
         """
-        if self.use_shared_framework and self.shared_agent:
-            # Use shared framework
-            return await self.shared_agent.generate_text(
-                prompt=prompt,
-                system_prompt=system_prompt or self.system_message,
-                context=context or []
-            )
-        else:
-            # Use direct GoogleADKClient (existing approach)
-            if not self.adk_client:
-                raise RuntimeError("Azure OpenAI client not initialized")
-            
-            return await self.adk_client.generate_text(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                context=context,
-                stream=False
-            )
+        return await self.shared_agent.generate_text(
+            prompt=prompt,
+            system_prompt=system_prompt or self.system_message,
+            context=context or []
+        )
     
     async def _chat_with_llm(
         self,
@@ -860,7 +565,7 @@ class BaseAgent:
         system_prompt: Optional[str] = None
     ) -> str:
         """
-        Chat with LLM using either shared framework or direct Azure OpenAI client.
+        Chat with LLM using ADKLlmAgent (shared framework).
         
         Args:
             messages: List of message dicts with 'role' and 'content'
@@ -869,32 +574,20 @@ class BaseAgent:
         Returns:
             Chat response
         """
-        if self.use_shared_framework and self.shared_agent:
-            # Use shared framework
-            return await self.shared_agent.chat(
-                messages=messages,
-                system_prompt=system_prompt or self.system_message
-            )
-        else:
-            # Use direct GoogleADKClient
-            if not self.adk_client:
-                raise RuntimeError("Azure OpenAI client not initialized")
-            
-            return await self.adk_client.chat(
-                messages=messages,
-                system_prompt=system_prompt,
-                stream=False
-            )
+        return await self.shared_agent.chat(
+            messages=messages,
+            system_prompt=system_prompt or self.system_message
+        )
 
 
 class CodeSearchRAGAgent(BaseAgent):
     """Agent that searches code repository using RAG and generates responses."""
     
-    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
+    def __init__(self, model: Optional[Model] = None):
         super().__init__(
             name="code_search_rag",
             description="Searches code repository using RAG with OpenSearch",
-            azure_openai_client=azure_openai_client
+            model=model
         )
     
     async def execute(
@@ -1168,11 +861,11 @@ Code:
 class SplunkAgent(BaseAgent):
     """Agent for Splunk queries and observability."""
     
-    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
+    def __init__(self, model: Optional[Model] = None):
         super().__init__(
             name="splunk",
             description="Handles Splunk queries, log analysis, and observability questions",
-            azure_openai_client=azure_openai_client
+            model=model
         )
     
     async def execute(
@@ -1273,11 +966,11 @@ class SplunkAgent(BaseAgent):
 class GeneralAgent(BaseAgent):
     """General purpose agent for conversations."""
     
-    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
+    def __init__(self, model: Optional[Model] = None):
         super().__init__(
             name="general",
             description="Handles general questions and conversations",
-            azure_openai_client=azure_openai_client
+            model=model
         )
     
     async def execute(
@@ -1338,11 +1031,11 @@ class GeneralAgent(BaseAgent):
 class SelectorAgent(BaseAgent):
     """Agent that analyzes user intent and selects appropriate specialized agents."""
     
-    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
+    def __init__(self, model: Optional[Model] = None):
         super().__init__(
             name="selector",
             description="Analyzes user intent and selects appropriate specialized agents",
-            azure_openai_client=azure_openai_client
+            model=model
         )
         self.available_agents = {
             "code_search_rag": "For code repository search, API documentation, code questions (uses RAG)",
@@ -1527,11 +1220,11 @@ class SelectorAgent(BaseAgent):
 class ResponseBuilderAgent(BaseAgent):
     """Agent that formats and builds cohesive responses from multiple agent results."""
     
-    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
+    def __init__(self, model: Optional[Model] = None):
         super().__init__(
             name="response_builder",
             description="Formats and builds cohesive responses from multiple agent results",
-            azure_openai_client=azure_openai_client
+            model=model
         )
     
     async def execute(
@@ -1712,11 +1405,11 @@ Agent {i} ({agent_name}):
 class EmailGeneratorAgent(BaseAgent):
     """Agent for generating and sending emails with summarization capabilities."""
     
-    def __init__(self, azure_openai_client: Optional[AzureOpenAIClient] = None):
+    def __init__(self, model: Optional[Model] = None):
         super().__init__(
             name="email_generator",
             description="Generates and sends emails with summarization and content generation",
-            azure_openai_client=azure_openai_client
+            model=model
         )
     
     async def execute(
@@ -2081,38 +1774,32 @@ class WorkflowOrchestrator:
     
     def __init__(
         self,
-        azure_openai_client: Optional[AzureOpenAIClient] = None,
-        use_shared_framework: Optional[bool] = None
+        model: Optional[Model] = None
     ):
         """
         Initialize orchestrator with available agents.
         
         Args:
-            azure_openai_client: Azure OpenAI client instance (for direct mode)
-            use_shared_framework: Whether to use shared framework (None = auto-detect from env)
+            model: Model instance from smart_sdk (if None, uses get_model())
         """
-        self.adk_client = azure_openai_client
+        if model is None:
+            model = get_model()
         
-        # Determine if shared framework should be used
-        if use_shared_framework is None:
-            use_shared_framework = USE_SHARED_FRAMEWORK_ENV and SHARED_FRAMEWORK_AVAILABLE
+        self.model = model
         
-        # Initialize agents with optional shared framework support
-        # For now, agents use direct client, but can be updated to use shared framework
-        # by passing use_shared_framework=True and appropriate config
+        # Initialize agents with ADKLlmAgent
         self.agents = {
-            "code_search_rag": CodeSearchRAGAgent(azure_openai_client),
-            "splunk": SplunkAgent(azure_openai_client),
-            "general": GeneralAgent(azure_openai_client),
-            "email_generator": EmailGeneratorAgent(azure_openai_client),
+            "code_search_rag": CodeSearchRAGAgent(model=model),
+            "splunk": SplunkAgent(model=model),
+            "general": GeneralAgent(model=model),
+            "email_generator": EmailGeneratorAgent(model=model),
         }
         
-        # Log framework mode
-        if use_shared_framework and SHARED_FRAMEWORK_AVAILABLE:
-            print("✅ WorkflowOrchestrator: Shared framework (smart_sdk) available")
-            print("   Note: Agents can be configured to use shared framework via BaseAgent.__init__")
-        else:
-            print("ℹ️  WorkflowOrchestrator: Using direct AzureOpenAIClient mode")
+        # Initialize selector and response builder agents
+        self.selector_agent = SelectorAgent(model=model)
+        self.response_builder_agent = ResponseBuilderAgent(model=model)
+        
+        print("✅ WorkflowOrchestrator: Using ADKLlmAgent with Azure OpenAI models")
     
     async def orchestrate(
         self,
@@ -2329,7 +2016,8 @@ class WorkflowOrchestrator:
         conversation_history: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Select which agents to invoke based on user message - enhanced with complex workflow support."""
-        if not self.adk_client:
+        # Use selector agent for LLM calls
+        if not self.selector_agent:
             # Fallback: simple keyword matching
             return self._select_agents_keyword(user_message)
         
@@ -2760,7 +2448,8 @@ class WorkflowOrchestrator:
         conversation_id: int
     ) -> AgentResult:
         """Generate LLM-based summary with structured UI blocks from multiple agent results."""
-        if not self.adk_client:
+        # Use selector agent for LLM calls
+        if not self.selector_agent:
             # Fallback to simple aggregation
             all_results = []
             for pr in phase_results.values():
@@ -2867,16 +2556,10 @@ Return ONLY valid JSON, no markdown formatting, no code blocks, just the raw JSO
 """
         
         try:
-            # Use _generate_with_llm which supports both shared framework and direct client
-            # Note: We need to access the orchestrator's adk_client or use a helper
-            # For now, we'll use the direct client approach but this should be refactored
-            if not self.adk_client:
-                raise RuntimeError("ADK client not available for summarization")
-            
-            summarized_response = await self.adk_client.generate_text(
+            # Use selector agent for LLM-based summarization
+            summarized_response = await self.selector_agent._generate_with_llm(
                 prompt=summary_prompt,
-                system_prompt="You are an expert at synthesizing information from multiple sources. Always return valid JSON with structured, actionable summaries that integrate insights from different perspectives. Never include markdown or code blocks in your response, only pure JSON.",
-                stream=False
+                system_prompt="You are an expert at synthesizing information from multiple sources. Always return valid JSON with structured, actionable summaries that integrate insights from different perspectives. Never include markdown or code blocks in your response, only pure JSON."
             )
             
             # Handle None or empty response
@@ -3177,66 +2860,21 @@ Return ONLY valid JSON, no markdown formatting, no code blocks, just the raw JSO
 
 # Global instances
 _orchestrator_instance: Optional[WorkflowOrchestrator] = None
-_adk_client_instance: Optional[AzureOpenAIClient] = None
+_model_instance: Optional[Model] = None
 
 
-def _initialize_azure_openai() -> Optional[AzureOpenAIClient]:
-    """Initialize Azure OpenAI client."""
-    global _adk_client_instance
+def _initialize_model() -> Optional[Model]:
+    """Initialize Azure OpenAI model using get_model()."""
+    global _model_instance
     
-    if _adk_client_instance:
-        return _adk_client_instance
-    
-    if not AZURE_OPENAI_AVAILABLE:
-        return None
+    if _model_instance:
+        return _model_instance
     
     try:
-        # Try to find config.ini and cert path
-        current_dir = os.path.dirname(__file__)
-        config_path = None
-        cert_path = None
-        
-        # Look for config.ini
-        possible_config_paths = [
-            os.path.join(current_dir, 'config.ini'),
-            os.path.join(current_dir, '..', 'config.ini'),
-            os.path.join(current_dir, '..', '..', 'config.ini'),
-            os.path.join(os.getcwd(), 'config.ini'),
-        ]
-        for path in possible_config_paths:
-            if os.path.exists(path):
-                config_path = path
-                break
-        
-        # Look for certificate
-        possible_cert_paths = [
-            os.path.join(current_dir, "..", "..", "discoveryeng.dev.azure.jpmchase.net.pem"),
-            os.path.join(current_dir, "discoveryeng.dev.azure.jpmchase.net.pem"),
-            os.path.join(os.path.dirname(current_dir), "discoveryeng.dev.azure.jpmchase.net.pem"),
-            os.path.join(os.getcwd(), "discoveryeng.dev.azure.jpmchase.net.pem"),
-        ]
-        for path in possible_cert_paths:
-            if os.path.exists(path):
-                cert_path = path
-                break
-        
-        config = AzureOpenAIConfig(
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT") or "https://llm-multitenancy-exp.jpmchase.net/ver2/",
-            deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4"),
-            openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21"),
-            openai_api_key=os.getenv("AZURE_OPENAI_API_KEY") or "b3d265714de0417cbd8af5c26b6013b1",
-            temperature=float(os.getenv("AZURE_OPENAI_TEMPERATURE", "0.7")),
-            max_tokens=int(os.getenv("AZURE_OPENAI_MAX_TOKENS", "2048")),
-            user_sid=os.getenv("AZURE_USER_SID", "default_user"),
-            cert_path=cert_path,
-            config_path=config_path
-        )
-        
-        _adk_client_instance = AzureOpenAIClient(config=config)
-        print("✅ Azure OpenAI client initialized for direct agents")
-        return _adk_client_instance
+        _model_instance = get_model()
+        return _model_instance
     except Exception as e:
-        print(f"⚠️ Failed to initialize Azure OpenAI: {e}")
+        print(f"⚠️ Failed to initialize model: {e}")
         import traceback
         print(traceback.format_exc())
         return None
@@ -3272,20 +2910,20 @@ async def process_conversation_agentic_direct(
     global _orchestrator_instance
     
     try:
-        # Initialize Azure OpenAI
-        adk_client = _initialize_azure_openai()
-        if not adk_client:
+        # Initialize model
+        model = _initialize_model()
+        if not model:
             return {
-                "content": "Azure OpenAI not available. Please configure Azure OpenAI settings.",
+                "content": "Model not available. Please configure Azure OpenAI settings and ensure smart_sdk is available.",
                 "blocks": [],
-                "error": "Azure OpenAI not available",
+                "error": "Model not available",
                 "thinking_mode": thinking_mode,
                 "agent": agent
             }
         
         # Initialize orchestrator if needed
         if _orchestrator_instance is None:
-            _orchestrator_instance = WorkflowOrchestrator(azure_openai_client=adk_client)
+            _orchestrator_instance = WorkflowOrchestrator(model=model)
         
         # Broadcast activity: Starting
         await websocket_manager.send_activity_status(
