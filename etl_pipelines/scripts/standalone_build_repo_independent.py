@@ -411,7 +411,7 @@ class StandaloneParser:
                         'calls': calls
                     })
             else:
-            for child in node.children:
+                for child in node.children:
                     traverse(child, parent_class)
         
         traverse(root)
@@ -639,6 +639,7 @@ class StandaloneParser:
         instance_fields = []
         static_blocks = []
         instance_blocks = []
+        constructors = []
         
         if class_decl.body:
             # Extract static and instance initializers from source code
@@ -728,6 +729,22 @@ class StandaloneParser:
                             static_fields.append(field_info)
                         else:
                             instance_fields.append(field_info)
+
+            # Extract constructors (code) via javalang when available
+            try:
+                if hasattr(class_decl, "constructors") and class_decl.constructors:
+                    for ctor in class_decl.constructors:
+                        ctor_code = self._get_constructor_code_from_content(ctor, class_name, content)
+                        if ctor_code:
+                            constructors.append(
+                                {
+                                    "name": class_name,
+                                    "code": ctor_code,
+                                    "modifiers": list(getattr(ctor, "modifiers", []) or []),
+                                }
+                            )
+            except Exception:
+                pass
         
         # Get class code (full class body)
         class_code = self._get_class_code_from_content(class_name, content)
@@ -748,6 +765,7 @@ class StandaloneParser:
             'instance_fields': instance_fields,
             'static_blocks': static_blocks,
             'instance_blocks': instance_blocks,
+            'constructors': constructors,
             'javalang_data': True  # Flag to indicate javalang extraction
         }
     
@@ -1065,6 +1083,107 @@ class StandaloneParser:
                                     return content[method_start:i + 1].strip()
                         i += 1
         
+        return ""
+
+    def _get_constructor_code_from_content(self, constructor, class_name: str, content: str) -> str:
+        """
+        Extract constructor code from content.
+        Prefer the constructor's line position (if available) to avoid false matches
+        like `new ClassName(...)`.
+        """
+        # Try to use javalang position for a more accurate local search
+        try:
+            pos = getattr(constructor, "position", None)
+            line = getattr(pos, "line", None) if pos else None
+            if line and isinstance(line, int) and line > 0:
+                # Compute byte offset for the start of that line
+                lines = content.splitlines(True)  # keep newlines
+                if line - 1 < len(lines):
+                    start_idx = sum(len(l) for l in lines[: line - 1])
+                    window = content[start_idx : min(len(content), start_idx + 8000)]
+                    m = re.search(rf'\b{re.escape(class_name)}\s*\(', window)
+                    if m:
+                        match_start = start_idx + m.start()
+                        # Skip anonymous class instantiation: `new ClassName(...) { ... }`
+                        before = content[max(0, match_start - 50) : match_start]
+                        prev_word = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", before)
+                        if prev_word and prev_word[-1] == "new":
+                            return ""
+
+                        # Go back to the likely declaration start
+                        line_start = content.rfind("\n", max(0, match_start - 200), match_start)
+                        if line_start == -1:
+                            line_start = max(0, match_start - 200)
+
+                        brace_pos = content.find("{", start_idx + m.end())
+                        if brace_pos != -1:
+                            brace_count = 0
+                            i = brace_pos
+                            in_string = False
+                            string_char = None
+                            while i < len(content):
+                                ch = content[i]
+                                if ch in ['"', "'"] and (i == 0 or content[i - 1] != "\\"):
+                                    if not in_string:
+                                        in_string = True
+                                        string_char = ch
+                                    elif ch == string_char:
+                                        in_string = False
+                                        string_char = None
+                                if not in_string:
+                                    if ch == "{":
+                                        brace_count += 1
+                                    elif ch == "}":
+                                        brace_count -= 1
+                                        if brace_count == 0:
+                                            return content[line_start : i + 1].strip()
+                                i += 1
+        except Exception:
+            pass
+
+        # Fallback: scan the whole file, skipping `new ClassName(`
+        patterns = [
+            rf"\b(?:public|protected|private)\s+{re.escape(class_name)}\s*\(",
+            rf"\b{re.escape(class_name)}\s*\(",
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, content):
+                match_start = match.start()
+                before = content[max(0, match_start - 50) : match_start]
+                prev_word = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", before)
+                if prev_word and prev_word[-1] == "new":
+                    continue
+
+                line_start = content.rfind("\n", max(0, match_start - 200), match_start)
+                if line_start == -1:
+                    line_start = max(0, match_start - 200)
+
+                brace_pos = content.find("{", match.end())
+                if brace_pos == -1:
+                    continue
+
+                brace_count = 0
+                i = brace_pos
+                in_string = False
+                string_char = None
+                while i < len(content):
+                    ch = content[i]
+                    if ch in ['"', "'"] and (i == 0 or content[i - 1] != "\\"):
+                        if not in_string:
+                            in_string = True
+                            string_char = ch
+                        elif ch == string_char:
+                            in_string = False
+                            string_char = None
+                    if not in_string:
+                        if ch == "{":
+                            brace_count += 1
+                        elif ch == "}":
+                            brace_count -= 1
+                            if brace_count == 0:
+                                return content[line_start : i + 1].strip()
+                    i += 1
+
         return ""
 
 
@@ -1831,12 +1950,12 @@ class StandaloneIndexer:
             # Sequential processing with progress bar
             file_iter = tqdm(code_files, desc="Processing files") if TQDM_AVAILABLE else code_files
             for file_path in file_iter:
-            parsed = self.parser.parse_file(file_path)
-            if not parsed:
-                continue
-            
-            file_chunks = self._generate_chunks_for_file(parsed, file_path)
-            all_chunks.extend(file_chunks)
+                parsed = self.parser.parse_file(file_path)
+                if not parsed:
+                    continue
+                
+                file_chunks = self._generate_chunks_for_file(parsed, file_path)
+                all_chunks.extend(file_chunks)
                 processed_files.add(file_path)
                 
                 # Save checkpoint periodically
@@ -1866,8 +1985,8 @@ class StandaloneIndexer:
             # Add embeddings to chunks with progress bar
             embed_iter = tqdm(zip(all_chunks, embeddings), total=len(all_chunks), desc="Adding embeddings") if TQDM_AVAILABLE else zip(all_chunks, embeddings)
             for chunk, embedding in embed_iter:
-            if embedding:
-                chunk['embedding'] = embedding
+                if embedding:
+                    chunk['embedding'] = embedding
         
         # Generate statistics with pandas if available
         if PANDAS_AVAILABLE and all_chunks:
@@ -2097,8 +2216,8 @@ class StandaloneIndexer:
     
     def _create_class_metadata_chunk(self, cls: Dict[str, Any], parsed: Dict[str, Any], file_path: str) -> Dict[str, Any]:
         """
-        Create a class metadata chunk: signature + fields + static blocks + instance blocks.
-        Does NOT include method bodies (those are in method chunks).
+        Create a class metadata chunk: signature + fields + static/instance blocks (+ constructors).
+        Does NOT include regular method bodies (those are in method chunks).
         Uses javalang data if available for better extraction.
         """
         file_content = parsed.get('file_content', '')
@@ -2174,6 +2293,12 @@ class StandaloneIndexer:
             for instance_block in cls.get('instance_blocks', []):
                 if instance_block:
                     class_level_parts.append(instance_block)
+
+            # Include constructors (constructor bodies are important class semantics)
+            for ctor in cls.get('constructors', []):
+                ctor_code = ctor.get('code', '')
+                if ctor_code:
+                    class_level_parts.append(ctor_code)
             
             # Debug output (only for first few classes to avoid spam)
             if not hasattr(self, '_class_metadata_debug_count'):
@@ -2670,8 +2795,8 @@ class StandaloneOpenSearch:
                     connection_class=RequestsHttpConnection
                 )
                 print(f"✅ Connected to OpenSearch: {self.opensearch_endpoint}")
-            except Exception as e:
-                print(f"⚠️ Failed to connect to OpenSearch: {e}")
+        except Exception as e:
+            print(f"⚠️ Failed to connect to OpenSearch: {e}")
             import traceback
             print(traceback.format_exc())
     
@@ -2778,7 +2903,13 @@ class StandaloneOpenSearch:
                     "properties": {
                         "chunk_id": {"type": "keyword"},
                         "type": {"type": "keyword"},
-                        "fqn": {"type": "keyword"},
+                        "fqn": {
+                            "type": "text",
+                            "fields": {
+                                # Keep exact-match / aggregations support
+                                "keyword": {"type": "keyword", "ignore_above": 256}
+                            }
+                        },
                         "file_path": {"type": "keyword"},  # Relative path
                         "filetype": {"type": "keyword"},  # File extension (.java, .py, etc.)
                         "module": {"type": "keyword"},  # Maven module (Java only, optional)
@@ -2955,7 +3086,7 @@ class StandaloneOpenSearch:
                         error_count += errors
                         if error_msg:
                             error_messages.append(error_msg)
-            except Exception as e:
+                    except Exception as e:
                         error_count += len(batches[batch_idx])
                         error_messages.append(f"Batch {batch_idx+1}: {str(e)}")
                     
